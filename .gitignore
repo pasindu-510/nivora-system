@@ -5,3 +5,16 @@
 
 # Build artifacts / deployment bundles
 deploy/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.Venv/
+*.sqlite3
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
