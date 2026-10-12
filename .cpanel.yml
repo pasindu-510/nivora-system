@@ -1,0 +1,23 @@
+# cPanel Git Version Control deployment tasks — OPTIONAL.
+#
+# Primary deployment for this project is File Manager / scp upload (see
+# docs/deploy-cpanel.md). This file only applies if you instead clone this
+# repo via cPanel → Files → Git Version Control.
+#
+# Layout contract: the Passenger "Application root" must be the directory
+# containing backend/passenger_wsgi.py. Two valid setups:
+#   A) Flat:  clone the repo, then set Application root = shopapi/backend
+#             (clone lands at ~/shopapi)
+#   B) Split: only the backend/ folder is pushed as a repo, cloned to ~/shopapi
+#             (Application root = shopapi)
+# Adjust DEPLOYDIR below to where the backend code actually is, and the venv
+# python path to the app's real virtualenv (shown on the Setup Python App page).
+---
+deployment:
+  tasks:
+    - export DEPLOYDIR=$HOME/shopapi              # ← match your layout
+    - export VENV_PY="$HOME/virtualenv/shopapi/3.12/bin/python"   # ← match your venv
+    - $VENV_PY -m pip install -r $DEPLOYDIR/requirements.txt --upgrade
+    - $VENV_PY $DEPLOYDIR/manage.py migrate --noinput
+    - $VENV_PY $DEPLOYDIR/manage.py collectstatic --noinput
+    - touch $DEPLOYDIR/tmp/restart.txt

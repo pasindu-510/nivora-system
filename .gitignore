@@ -1,0 +1,7 @@
+# Local environment secrets — never commit real .env files.
+# Templates (.env.example, .env.production.example) and the non-secret
+# frontend/.env.production stay tracked.
+.env
+
+# Build artifacts / deployment bundles
+deploy/

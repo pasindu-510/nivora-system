@@ -1,0 +1,224 @@
+@import 'tailwindcss';
+
+/*
+  Design system tokens (Tailwind v4 CSS-first config).
+  Every color, radius, and shadow used in the app is defined here — never
+  hardcode hex values inside components.
+*/
+@theme {
+  /* Typography — distinctive, readable admin UI stack */
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Brand — electric blue scale */
+  --color-brand-50: #edf5ff;
+  --color-brand-100: #d9e9ff;
+  --color-brand-200: #bcdaff;
+  --color-brand-300: #8ec3ff;
+  --color-brand-400: #59a1ff;
+  --color-brand-500: #3380fb;
+  --color-brand-600: #1b62ef;
+  --color-brand-700: #144ddc;
+  --color-brand-800: #1740b2;
+  --color-brand-900: #193a8c;
+  --color-brand-950: #142555;
+
+  /* Semantic surfaces */
+  --color-surface: #f4f6fb;
+  --color-sidebar: #0b1324;
+  --color-sidebar-hover: #17223a;
+  --color-sidebar-muted: #94a3bd;
+
+  /* Radii */
+  --radius-card: 0.875rem;
+  --radius-control: 0.5rem;
+
+  /* Elevation */
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.06), 0 10px 28px -18px rgba(15, 23, 42, 0.25);
+  --shadow-pop: 0 8px 30px -6px rgba(15, 23, 42, 0.22);
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-surface font-sans text-slate-800;
+  }
+
+  ::selection {
+    @apply bg-brand-200 text-brand-950;
+  }
+}
+
+/* Component primitives — the shared building blocks of the design system.
+   Note: Tailwind v4 cannot @apply custom component classes, so each variant
+   carries the full base set explicitly. */
+@layer components {
+  .card {
+    @apply rounded-card border border-slate-200/80 bg-white shadow-card;
+  }
+
+  .btn-primary {
+    @apply inline-flex cursor-pointer items-center justify-center gap-2 rounded-control px-3.5 py-2 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 bg-brand-600 text-white hover:bg-brand-700;
+  }
+
+  .btn-secondary {
+    @apply inline-flex cursor-pointer items-center justify-center gap-2 rounded-control px-3.5 py-2 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 border border-slate-300 bg-white text-slate-700 hover:bg-slate-50;
+  }
+
+  .btn-danger {
+    @apply inline-flex cursor-pointer items-center justify-center gap-2 rounded-control px-3.5 py-2 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 bg-rose-600 text-white hover:bg-rose-700;
+  }
+
+  .btn-ghost {
+    @apply inline-flex cursor-pointer items-center justify-center gap-2 rounded-control px-3.5 py-2 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 text-slate-600 hover:bg-slate-100;
+  }
+
+  .input {
+    @apply block w-full rounded-control border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/25 disabled:cursor-not-allowed disabled:bg-slate-50;
+  }
+
+  .input-error {
+    @apply border-rose-400 focus:border-rose-500 focus:ring-rose-500/25;
+  }
+
+  .label {
+    @apply mb-1.5 block text-sm font-semibold text-slate-700;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold;
+  }
+}
+
+/* ------------------------------ Scrollbars -------------------------------
+   Sidebar scrollbar skin — opt-in utility that restyles the nav rail's
+   scrollbar to the dark sidebar surface. Colours derive from the sidebar
+   tokens (never hardcoded); WebKit pseudo-elements and Firefox's standard
+   scrollbar-width/scrollbar-color share the same thumb/track relationship
+   so both engines render the same track tint, thumb tone, and hover lift. */
+@utility scrollbar-sidebar {
+  /* Reserve the gutter up front so nav content never shifts when the
+     scrollbar appears or disappears. */
+  scrollbar-gutter: stable;
+
+  /* Firefox (standard properties): thumb then track. */
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--color-sidebar-muted) 55%, transparent)
+    color-mix(in oklab, var(--color-sidebar-hover) 55%, transparent);
+
+  /* WebKit / Chromium (pseudo-elements) */
+  &::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  /* Subtly tinted track — present, but never a light block on #0b1324. */
+  &::-webkit-scrollbar-track {
+    background: color-mix(in oklab, var(--color-sidebar-hover) 55%, transparent);
+  }
+
+  /* Muted slate thumb, pill-rounded ends, lifts to solid on hover. */
+  &::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--color-sidebar-muted) 55%, transparent);
+    border-radius: 9999px;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background: var(--color-sidebar-muted);
+  }
+}
+
+/* --------------------------------- Print ---------------------------------
+   A4 bill printing (sale invoice + installment receipt) from the sale
+   detail page's bill-preview modal. Pressing "Print" in the modal keeps
+   `bill-print-mode` on <body>; the rules below remove the app shell and
+   every sibling page card, so only the two hidden `print:block` bill copies
+   inside `.bill-print-target` reach the paper. The modal's visible copies
+   (`.bill-preview-sheet`) are the PDF-capture source — they never print. */
+@page {
+  size: A4;
+  margin: 14mm 12mm;
+}
+
+/* Sheet preview + PDF capture surface: A4-shaped white block with the same
+   14mm/16mm gutters as the approved invoice design. Screen-only; in print
+   the modal is dropped entirely. */
+.bill-preview-sheet {
+  width: 210mm;
+  min-height: 297mm;
+  margin-inline: auto;
+  box-sizing: border-box;
+  background: #fff;
+  padding: 14mm 16mm;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.14);
+}
+
+.bill-preview-sheet + .bill-preview-sheet {
+  margin-top: 28px;
+}
+
+@media print {
+  html,
+  body {
+    background: #fff !important;
+  }
+
+  /* App shell chrome never prints (bills never use these tags) */
+  aside,
+  header {
+    display: none !important;
+  }
+
+  /* Routed main + its padded wrapper go edge-to-edge inside @page margins */
+  main {
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .lg\:pl-72 {
+    padding-left: 0 !important;
+  }
+
+  .min-h-screen.bg-surface {
+    min-height: auto !important;
+    background: #fff !important;
+  }
+
+  /* Bill-preview mode: drop every sale-detail card and the modal chrome
+     (the modal is a child of .space-y-6 too), leaving only the print target. */
+  body.bill-print-mode main .space-y-6 > * {
+    display: none !important;
+  }
+
+  body.bill-print-mode main .space-y-6 > .bill-print-target {
+    display: block !important;
+    margin: 0 !important;
+  }
+
+  /* Installment receipt starts on its own A4 page */
+  .print-receipt-block {
+    break-before: page;
+  }
+
+  /* Bill tables: repeat column headers across pages, never split a row */
+  .bill-root thead {
+    display: table-header-group;
+  }
+
+  .bill-root tr {
+    break-inside: avoid;
+  }
+
+  /* Shaded bill blocks (receipt amount box) must reach the paper even when
+     "background graphics" is off */
+  .bill-root,
+  .bill-root * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
