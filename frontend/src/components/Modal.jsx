@@ -25,14 +25,17 @@ export default function Modal({ open, onClose, title, description, children, foo
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-slate-950/45 p-4 backdrop-blur-[2px] sm:items-center"
+      // No items-center here: a vertically centred flex child taller than the
+      // viewport gets its top clipped and cannot be scrolled to. Auto margins
+      // on the dialog centre it when it fits and let it scroll when it doesn't.
+      className="fixed inset-0 z-50 flex overflow-y-auto bg-slate-950/45 p-4 backdrop-blur-[2px]"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && onClose) onClose();
       }}
       role="presentation"
     >
       <div
-        className={`card w-full ${sizeClasses[size] || sizeClasses.md} shadow-pop`}
+        className={`card mx-auto mt-auto w-full sm:mb-auto ${sizeClasses[size] || sizeClasses.md} shadow-pop`}
         role="dialog"
         aria-modal="true"
         aria-label={title}

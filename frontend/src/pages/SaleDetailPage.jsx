@@ -852,11 +852,14 @@ export default function SaleDetailPage() {
             </div>
 
             {/* Visible A4 copies — the invoice sheet is the PDF capture source */}
-            <div className="bill-preview-sheet" ref={invoiceSheetRef}>
-              <SaleInvoiceBill sale={sale} />
-            </div>
+            {/* The A4 sheet is a fixed 210mm wide; scroll sideways on narrow screens */}
+            <div className="overflow-x-auto">
+              <div className="bill-preview-sheet" ref={invoiceSheetRef}>
+                <SaleInvoiceBill sale={sale} />
+              </div>
 
-            {renderReceiptBillPreview()}
+              {renderReceiptBillPreview()}
+            </div>
           </Modal>
         </div>
       )}
