@@ -62,7 +62,10 @@ TMP="$OUT.partial"
 
 # --single-transaction: consistent snapshot without locking the shop.
 # --no-tablespaces: shared hosting users lack the PROCESS privilege.
-if mysqldump --defaults-extra-file="$CNF" \
+# MariaDB hosts ship mariadb-dump and warn when called as mysqldump.
+DUMP=$(command -v mariadb-dump || command -v mysqldump)
+
+if "$DUMP" --defaults-extra-file="$CNF" \
     --single-transaction --quick --routines --triggers --no-tablespaces \
     --default-character-set=utf8mb4 "$DB_NAME" | gzip -9 > "$TMP"; then
   mv "$TMP" "$OUT"
