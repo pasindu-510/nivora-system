@@ -42,6 +42,12 @@ STATIC_URL = os.environ.get('STATIC_URL', '/static/')
 STATIC_ROOT = Path(os.environ.get('STATIC_ROOT', BASE_DIR / 'staticfiles'))
 MEDIA_URL = '/media/'
 MEDIA_ROOT = Path(os.environ.get('MEDIA_ROOT', BASE_DIR / 'media'))
+# Private uploads (customer ID-card photos). Must NOT be under public_html:
+# files here are only served by the API through short-lived signed links
+# (blueprint B-24). Default sits next to manage.py, outside any web root.
+PRIVATE_MEDIA_ROOT = Path(os.environ.get('PRIVATE_MEDIA_ROOT', BASE_DIR / 'private_media'))
+# Lifetime of a signed ID-photo link, in seconds.
+PRIVATE_MEDIA_URL_MAX_AGE = int(os.environ.get('PRIVATE_MEDIA_URL_MAX_AGE', 3600))
 
 # ── Applications ─────────────────────────────────────────────────────────────
 INSTALLED_APPS = [

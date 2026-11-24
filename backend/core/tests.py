@@ -3388,3 +3388,104 @@ class CashAccountListPerformanceTests(APITestCase):
 
     def test_query_count_does_not_grow_with_accounts(self):
         self.assertEqual(self._query_count(2), self._query_count(8))
+
+
+class CustomerIdPhotoPrivacyTests(APITestCase):
+    """B-24: ID-card photos live outside the public media root and are only
+    reachable through a signed, customer-bound, expiring API link."""
+
+    def setUp(self):
+        self._public = tempfile.mkdtemp()
+        self._private = tempfile.mkdtemp()
+        self._override = override_settings(MEDIA_ROOT=self._public, PRIVATE_MEDIA_ROOT=self._private)
+        self._override.enable()
+        default_storage._wrapped = lazy_sentinel
+        self.biz = _make_business('Photo Co', tax_rate='0.00')
+        self.branch = _make_branch(self.biz)
+        self.cashier = _make_user('photo_cash', RoleConstants.CASHIER, self.biz, self.branch)
+
+    def tearDown(self):
+        self._override.disable()
+        default_storage._wrapped = lazy_sentinel
+        shutil.rmtree(self._public, ignore_errors=True)
+        shutil.rmtree(self._private, ignore_errors=True)
+
+    def _png(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        buf = BytesIO()
+        Image.new('RGB', (4, 4), (10, 120, 30)).save(buf, format='PNG')
+        return SimpleUploadedFile('nic.png', buf.getvalue(), content_type='image/png')
+
+    def _create(self, name='Nimal'):
+        self.client.force_authenticate(self.cashier)
+        resp = self.client.post(
+            reverse('customer-list'),
+            {'name': name, 'phone': '0771234567', 'id_card_photo': self._png()},
+            format='multipart',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
+        return resp
+
+    def test_photo_stored_privately_and_served_by_signed_link(self):
+        import os
+
+        resp = self._create()
+        customer = Customer.objects.get(pk=resp.data['id'])
+        name = customer.id_card_photo.name
+        self.assertTrue(os.path.isfile(os.path.join(self._private, name)))
+        self.assertFalse(os.path.exists(os.path.join(self._public, name)))
+
+        url = resp.data['id_card_photo']
+        self.assertIn('/id-card-photo/?sig=', url)
+        self.assertNotIn('/media/', url)
+
+        self.client.force_authenticate(None)  # an <img> tag sends no JWT
+        photo = self.client.get(url)
+        self.assertEqual(photo.status_code, status.HTTP_200_OK)
+        self.assertTrue(b''.join(photo.streaming_content).startswith(b'\x89PNG'))
+
+    def test_missing_or_tampered_signature_is_404(self):
+        resp = self._create()
+        base = reverse('customer-id-card-photo', kwargs={'pk': resp.data['id']})
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get(base).status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(self.client.get(base + '?sig=abc').status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_signature_is_bound_to_one_customer(self):
+        first = self._create('First')
+        second = self._create('Second')
+        sig = first.data['id_card_photo'].split('?sig=')[1]
+        other = reverse('customer-id-card-photo', kwargs={'pk': second.data['id']})
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get(f'{other}?sig={sig}').status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_expired_signature_is_404(self):
+        resp = self._create()
+        url = resp.data['id_card_photo']
+        self.client.force_authenticate(None)
+        with override_settings(PRIVATE_MEDIA_URL_MAX_AGE=-1):
+            self.assertEqual(self.client.get(url).status_code, status.HTTP_404_NOT_FOUND)
+
+
+class ProtectedDeleteTests(APITestCase):
+    """Deleting an expense category that expenses still use is a 400, not a 500."""
+
+    def test_delete_used_expense_category_is_400(self):
+        from .models import Expense, ExpenseCategory
+
+        biz = _make_business('Del Co', tax_rate='0.00')
+        branch = _make_branch(biz)
+        admin = _make_user('del_admin', RoleConstants.BUSINESS_ADMIN, biz, branch)
+        cat = ExpenseCategory.objects.create(business=biz, name='Rent')
+        Expense.objects.create(
+            business=biz, branch=branch, category=cat, amount=Decimal('100.00'),
+            expense_date=timezone.localdate(), paid_by=admin,
+        )
+        self.client.force_authenticate(admin)
+        resp = self.client.delete(reverse('expensecategory-detail', kwargs={'pk': cat.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('cannot be deleted', resp.data['detail'])
+        self.assertTrue(ExpenseCategory.objects.filter(pk=cat.pk).exists())

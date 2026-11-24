@@ -49,6 +49,7 @@ export const menuGroups = [
     items: [
       { label: 'Customers', to: '/customers', icon: 'users', roles: STAFF },
       { label: 'Suppliers', to: '/suppliers', icon: 'truck', roles: ADMIN_MANAGER },
+      { label: 'Supplier Payments', to: '/suppliers/payments', icon: 'receipt', roles: ADMIN_MANAGER },
     ],
   },
   {
@@ -56,6 +57,7 @@ export const menuGroups = [
     items: [
       { label: 'Expenses', to: '/expenses', icon: 'receipt', roles: ADMIN_MANAGER },
       { label: 'Recurring Expenses', to: '/expenses/recurring', icon: 'repeat', roles: ADMIN_MANAGER },
+      { label: 'Expense Categories', to: '/expenses/categories', icon: 'folder', roles: ADMIN_MANAGER },
       { label: 'Promotions', to: '/promotions', icon: 'percent', roles: ADMIN_MANAGER },
       { label: 'Reports', to: '/reports', icon: 'chart', roles: ADMIN_MANAGER },
     ],

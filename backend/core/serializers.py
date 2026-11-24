@@ -8,9 +8,11 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.db import transaction
+from django.urls import reverse
 from rest_framework import serializers
 
 from . import services
+from .storage import sign_customer_photo
 
 
 def logo_url(business):
@@ -280,7 +282,23 @@ class ItemCreateSerializer(ItemDetailSerializer):
         return attrs
 
 
+class PrivatePhotoField(serializers.ImageField):
+    """Accepts an uploaded image; renders a signed, expiring API URL instead
+    of a public media path (B-24). Same field name/shape as before (a URL)."""
+
+    def to_representation(self, value):
+        if not value:
+            return None
+        customer = value.instance  # FieldFile knows its model instance
+        request = self.context.get('request')
+        path = reverse('customer-id-card-photo', kwargs={'pk': customer.pk})
+        url = f'{path}?sig={sign_customer_photo(customer)}'
+        return request.build_absolute_uri(url) if request else url
+
+
 class CustomerSerializer(TenantModelSerializer):
+    id_card_photo = PrivatePhotoField(required=False, allow_null=True)
+
     class Meta:
         model = Customer
         fields = [

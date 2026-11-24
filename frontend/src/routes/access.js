@@ -30,8 +30,10 @@ export const routeAccess = {
   '/stock/lots': ADMIN_MANAGER,
   '/stock/movements': ADMIN_MANAGER,
   '/suppliers': ADMIN_MANAGER,
+  '/suppliers/payments': ADMIN_MANAGER,
   '/expenses': ADMIN_MANAGER,
   '/expenses/recurring': ADMIN_MANAGER,
+  '/expenses/categories': ADMIN_MANAGER,
   '/promotions': ADMIN_MANAGER,
   '/reports': ADMIN_MANAGER,
 

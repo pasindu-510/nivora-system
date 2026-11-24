@@ -1,6 +1,6 @@
 """Catalog endpoints: categories, brands, items (spec 6.3)."""
 from django.db import transaction
-from django.db.models import F, ProtectedError
+from django.db.models import F
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
@@ -54,6 +54,10 @@ class ItemViewSet(TenantModelViewSet):
     timestamps.  Managers may write; every business role may read.
     """
 
+    protected_delete_message = (
+        'This item has sale or purchase history and cannot be deleted. '
+        'Deactivate it instead.'
+    )
     queryset = Item.objects.select_related(
         'business', 'category', 'brand'
     ).prefetch_related('lots__branch').all()
@@ -194,18 +198,3 @@ class ItemViewSet(TenantModelViewSet):
             reference='OPENING',
             created_by=self.request.user,
         )
-
-    def destroy(self, request, *args, **kwargs):
-        """Reject deleting items referenced by sales/purchases (400, not 500)."""
-        try:
-            return super().destroy(request, *args, **kwargs)
-        except ProtectedError:
-            return Response(
-                {
-                    'detail': (
-                        'This item has sale or purchase history and cannot be '
-                        'deleted. Deactivate it instead.'
-                    ),
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )

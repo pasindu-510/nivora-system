@@ -1,12 +1,15 @@
 """Customer endpoints (spec 6.4)."""
 from django.db.models import Sum
+from django.http import FileResponse, Http404
 from rest_framework import filters
+from rest_framework.permissions import AllowAny
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from ..models import Customer, Sale
 from ..permissions import IsCashierOrAbove
 from ..serializers import CustomerSerializer, SaleListSerializer
+from ..storage import check_customer_photo_token
 from ..viewsets import TenantModelViewSet
 
 
@@ -19,6 +22,35 @@ class CustomerViewSet(TenantModelViewSet):
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'phone', 'nic']
     ordering_fields = ['name', 'created_at']
+
+    @action(
+        detail=True, methods=['get'], url_path='id-card-photo', url_name='id-card-photo',
+        permission_classes=[AllowAny], authentication_classes=[],
+    )
+    def id_card_photo(self, request, pk=None):
+        """Serve a customer's ID-card photo from private storage (B-24).
+
+        No JWT (an <img> tag cannot send one); access is granted by the
+        `sig` query parameter that CustomerSerializer issues to authenticated,
+        tenant-scoped callers. The token is bound to this customer and file
+        name and expires after PRIVATE_MEDIA_URL_MAX_AGE seconds.
+        """
+        customer = Customer.objects.filter(pk=pk).first()
+        token = request.query_params.get('sig', '')
+        if (
+            customer is None
+            or not customer.id_card_photo
+            or not check_customer_photo_token(customer, token)
+        ):
+            raise Http404
+        try:
+            handle = customer.id_card_photo.open('rb')
+        except FileNotFoundError:
+            raise Http404
+        response = FileResponse(handle)
+        response['Cache-Control'] = 'private, max-age=300'
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
 
     @action(detail=True, methods=['get'])
     def history(self, request, pk=None):

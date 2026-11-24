@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { suppliersApi } from '../api/endpoints.js';
 import { qk } from '../api/queryKeys.js';
@@ -225,6 +226,13 @@ export default function SuppliersPage() {
           className="flex items-center justify-end gap-2"
           onClick={(event) => event.stopPropagation()}
         >
+          <Link
+            to={`/suppliers/payments?supplier=${row.id}`}
+            className="btn-secondary whitespace-nowrap px-2.5 py-1.5 text-xs"
+            title="Balance owed and payments"
+          >
+            Payments &amp; balance
+          </Link>
           <button
             type="button"
             className="btn-secondary px-2 py-1.5"

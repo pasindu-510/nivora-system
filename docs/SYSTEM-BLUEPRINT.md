@@ -979,7 +979,16 @@ request; `CashAccountListPerformanceTests`), B-23 (super admin removed from
 `DASHBOARD_VIEWERS`), B-25 (health probe: 30 s interval, 8 s timeout, paused in hidden tabs,
 2 consecutive failures before "Offline"). The rules in §5–§7 describe the fixed behaviour;
 the table below keeps the original description for history.
-**Still open:** B-24 and gaps G-01…G-07.
+Third batch (2026-11-24): B-24 fixed — ID-card photos are stored under `PRIVATE_MEDIA_ROOT`
+(outside the web root; migration 0006 moves existing files) and served only by
+`GET /api/customers/{id}/id-card-photo/?sig=…` (signed, bound to customer + file, expires after
+`PRIVATE_MEDIA_URL_MAX_AGE`, default 3600 s); `CustomerSerializer.id_card_photo` now returns that
+signed URL. G-01 closed (`/expenses/categories` screen). G-02 partly closed: `/suppliers/payments`
+(supplier payments + ledger) and the "Adjust Stock" dialog on `/stock/movements`; the payments
+registry and `/reports/sales`, `/reports/stock` screens are still missing. Deleting a row that is
+still referenced (on_delete=PROTECT) now returns 400 for every tenant endpoint.
+Mobile: modals scroll instead of clipping their top; tables keep one line per cell on phones.
+**Still open:** G-02 (remaining screens), G-03…G-07.
 
 ### Bugs
 

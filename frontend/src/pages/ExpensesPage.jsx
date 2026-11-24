@@ -483,7 +483,16 @@ export default function ExpensesPage() {
         ) : null}
         <form id="expense-form" onSubmit={handleSubmit} noValidate>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <FormField label="Category" required error={errors.category}>
+            <FormField
+              label="Category"
+              required
+              error={errors.category}
+              hint={
+                categoryQuery.isSuccess && categories.length === 0
+                  ? 'No categories yet — create them under Finance → Expense Categories.'
+                  : undefined
+              }
+            >
               <select
                 className="input"
                 name="category"

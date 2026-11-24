@@ -9,6 +9,7 @@ import Icon from '../components/Icon.jsx';
 import PageHeader from '../components/PageHeader.jsx';
 import DataTable from '../components/DataTable.jsx';
 import StatCard from '../components/StatCard.jsx';
+import StockAdjustModal from '../components/StockAdjustModal.jsx';
 
 const LOOKUP_PARAMS = { page_size: 100 };
 
@@ -47,6 +48,7 @@ export default function StockMovementsPage() {
   const [itemFilter, setItemFilter] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [adjustOpen, setAdjustOpen] = useState(false);
 
   // Lookups feed the filter bar (and branch-name resolution) — always on,
   // with a generous staleTime so they rarely refetch.
@@ -177,6 +179,17 @@ export default function StockMovementsPage() {
             ? 'Loading stock movements...'
             : `${count} ${count === 1 ? 'movement' : 'movements'}`
         }
+        actions={
+          <button type="button" className="btn-primary" onClick={() => setAdjustOpen(true)}>
+            Adjust Stock
+          </button>
+        }
+      />
+
+      <StockAdjustModal
+        open={adjustOpen}
+        onClose={() => setAdjustOpen(false)}
+        branches={branches.filter((branch) => branch.is_active !== false)}
       />
 
       {listQuery.isError ? (

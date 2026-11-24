@@ -19,8 +19,10 @@ import StockReceivePage from '../pages/StockReceivePage.jsx';
 import StockLotsPage from '../pages/StockLotsPage.jsx';
 import StockMovementsPage from '../pages/StockMovementsPage.jsx';
 import SuppliersPage from '../pages/SuppliersPage.jsx';
+import SupplierPaymentsPage from '../pages/SupplierPaymentsPage.jsx';
 import ExpensesPage from '../pages/ExpensesPage.jsx';
 import RecurringExpensesPage from '../pages/RecurringExpensesPage.jsx';
+import ExpenseCategoriesPage from '../pages/ExpenseCategoriesPage.jsx';
 import FinanceSettingsPage from '../pages/FinanceSettingsPage.jsx';
 import PromotionsPage from '../pages/PromotionsPage.jsx';
 import ReportsPage from '../pages/ReportsPage.jsx';
@@ -94,10 +96,12 @@ export default function AppRoutes() {
         <Route path="/stock/lots" element={guarded(ADMIN_MANAGER, <StockLotsPage />)} />
         <Route path="/stock/movements" element={guarded(ADMIN_MANAGER, <StockMovementsPage />)} />
         <Route path="/suppliers" element={guarded(ADMIN_MANAGER, <SuppliersPage />)} />
+        <Route path="/suppliers/payments" element={guarded(ADMIN_MANAGER, <SupplierPaymentsPage />)} />
 
         {/* Finance — admin/manager */}
         <Route path="/expenses" element={guarded(ADMIN_MANAGER, <ExpensesPage />)} />
         <Route path="/expenses/recurring" element={guarded(ADMIN_MANAGER, <RecurringExpensesPage />)} />
+        <Route path="/expenses/categories" element={guarded(ADMIN_MANAGER, <ExpenseCategoriesPage />)} />
         <Route path="/promotions" element={guarded(ADMIN_MANAGER, <PromotionsPage />)} />
         <Route path="/reports" element={guarded(ADMIN_MANAGER, <ReportsPage />)} />
 

@@ -18,3 +18,5 @@ node_modules/
 
 # OS
 .DS_Store
+# Private uploads (customer ID photos) — never commit
+backend/private_media/

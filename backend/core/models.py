@@ -8,6 +8,8 @@ from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils import timezone
 
+from .storage import private_storage
+
 
 class RoleConstants:
     """Module-level role enum constants (no DB table, spec 4.1)."""
@@ -261,8 +263,9 @@ class Customer(BusinessModel):
     phone = models.CharField(max_length=30, blank=True)
     nic = models.CharField(max_length=20, blank=True)
     address = models.TextField(blank=True)
+    # Stored privately (outside public_html) — see core/storage.py, B-24.
     id_card_photo = models.ImageField(
-        upload_to='customers/', null=True, blank=True
+        upload_to='customers/', null=True, blank=True, storage=private_storage
     )
 
     class Meta:

@@ -268,6 +268,7 @@ touch tmp/restart.txt
 | `DisallowedHost` 400 | Missing/extra host in `ALLOWED_HOSTS` (must include `api.nivora.lk`) |
 | CORS error in browser console | `CORS_ALLOWED_ORIGINS` must be exactly `https://system.nivora.lk` (no trailing slash) |
 | Logos 404 | `MEDIA_ROOT` points somewhere Apache can't see; media must live under `public_html/system/media` |
+| Customer ID photo broken | Photos live in `PRIVATE_MEDIA_ROOT` (default `backend/private_media`, outside `public_html`) and load via signed `/api/customers/<id>/id-card-photo/?sig=…` links that expire after 1 h — refresh the page. Run `migrate` after updating so migration 0006 moves old photos out of `public_html`. |
 | Django admin has no CSS | `STATIC_URL` must be the absolute SPA origin URL and `collectstatic` must have run |
 | 503 "Service Unavailable" on the API, `stderr.log` shows `lswsgi_wrapper: … /opt/alt/python3XX/bin/lswsgi: No such file or directory` | LiteSpeed's Python connector is missing on the server — only the host can install it (open a ticket quoting the log line) |
 | `OperationalError (2013, 'Lost connection to MySQL server')` | Host kills idle MySQL connections: set `DB_CONN_MAX_AGE=0` in `.env`; create the superuser non-interactively (`read -s DJANGO_SUPERUSER_PASSWORD; export DJANGO_SUPERUSER_PASSWORD; manage.py createsuperuser --noinput --username X --role super_admin`) |
