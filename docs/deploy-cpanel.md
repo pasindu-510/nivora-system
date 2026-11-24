@@ -299,3 +299,18 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
 ```
 Then redeploy the backend (`passenger_wsgi.py` sibling is unchanged) and restart.
+## Nightly database backup → Google Drive
+
+`backup-db.sh` (repo root) dumps MySQL to `~/backups/db/*.sql.gz` (14 days kept), then copies
+each file to Google Drive folder `nivora-db-backups` with rclone (30 days kept there).
+
+One-time rclone setup (scope `drive.file` = rclone sees only files it created):
+1. Server: `mkdir -p ~/bin && cd ~/bin && curl -fsSLO https://downloads.rclone.org/rclone-current-linux-amd64.zip && unzip -oj rclone-current-linux-amd64.zip '*/rclone' && chmod +x rclone && rm rclone-current-linux-amd64.zip && ./rclone version`
+2. Windows PC (has a browser): download rclone for Windows from https://rclone.org/downloads/, then in that folder:
+   `.\rclone.exe authorize "drive" "eyJzY29wZSI6ImRyaXZlLmZpbGUifQ=="` → sign in → copy the printed `{...}` token.
+3. Server: `~/bin/rclone config create gdrive drive scope=drive.file token='PASTE_TOKEN_JSON'`
+4. Test: `bash ~/repositories/nivora-system/backup-db.sh` → log shows `uploaded to gdrive:nivora-db-backups/...`.
+
+Cron (cPanel → Cron Jobs), midnight Sri Lanka time: `0 0 * * *` if `date` shows +0530,
+`30 18 * * *` if UTC. Command: `bash /home/nivoralk/repositories/nivora-system/backup-db.sh >/dev/null`.
+Restore: `gunzip -c FILE.sql.gz | mysql -u DB_USER -p DB_NAME`.

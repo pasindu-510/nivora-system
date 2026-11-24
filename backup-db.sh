@@ -7,6 +7,7 @@
 #   (no credentials live in this repo).
 # - Writes ~/backups/db/<db>_YYYY-MM-DD_HHMM.sql.gz  (outside public_html).
 # - Keeps the newest $KEEP_DAYS days of backups, deletes older ones.
+# - Copies each backup to Google Drive via rclone (remote "gdrive"), keeps 30 days there.
 # - Logs to ~/backups/db/backup.log; exits non-zero on failure so cron mails it.
 #
 # Restore:  gunzip -c FILE.sql.gz | mysql -u USER -p DB_NAME
@@ -76,3 +77,23 @@ fi
 # Retention: drop backups older than KEEP_DAYS days.
 find "$BACKUP_DIR" -name "${DB_NAME}_*.sql.gz" -type f -mtime +"$KEEP_DAYS" -print -delete \
   | while read -r old; do log "deleted old backup $old"; done
+
+# ── Off-server copy to Google Drive (rclone) ───────────────────────────────
+# Enabled once an rclone remote named "gdrive" exists (see docs/deploy-cpanel.md).
+# The local backup above is already safe even if this upload fails.
+RCLONE="${RCLONE:-$(command -v rclone || echo "$HOME/bin/rclone")}"
+GDRIVE_DEST="${GDRIVE_DEST:-gdrive:nivora-db-backups}"
+GDRIVE_KEEP_DAYS="${GDRIVE_KEEP_DAYS:-30}"
+
+if [ -x "$RCLONE" ] && "$RCLONE" listremotes 2>/dev/null | grep -qx "${GDRIVE_DEST%%:*}:"; then
+  if "$RCLONE" copy "$OUT" "$GDRIVE_DEST" --retries 3 --low-level-retries 10 2>>"$LOG"; then
+    log "OK  uploaded to $GDRIVE_DEST/$(basename "$OUT")"
+    "$RCLONE" delete "$GDRIVE_DEST" --min-age "${GDRIVE_KEEP_DAYS}d" --include "${DB_NAME}_*.sql.gz" 2>>"$LOG" \
+      || log "WARN: could not prune old Google Drive backups"
+  else
+    log "ERROR: Google Drive upload failed (local backup kept: $OUT)"
+    exit 1
+  fi
+else
+  log "NOTE: Google Drive upload skipped (rclone or remote '${GDRIVE_DEST%%:*}' not set up)"
+fi
