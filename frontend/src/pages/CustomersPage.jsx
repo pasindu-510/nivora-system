@@ -564,7 +564,7 @@ export default function CustomersPage() {
               </div>
             </div>
 
-            <div className="rounded-control border border-slate-200 overflow-hidden">
+            <div className="rounded-control border border-slate-200 overflow-x-auto">
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-50/80">
                   <tr>

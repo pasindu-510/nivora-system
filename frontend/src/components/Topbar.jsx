@@ -69,12 +69,22 @@ export default function Topbar({ onMenuClick }) {
         </div>
 
         <div className="ml-auto flex items-center gap-3">
-          {/* Business logo in the top-right area (visible on lg+) */}
+          {/* Compact connection dot on phones (the labelled pill is sm+) */}
+          <span
+            className={`size-2.5 rounded-full sm:hidden ${
+              status === 'online' ? 'bg-emerald-500' : status === 'offline' ? 'bg-rose-500' : 'animate-pulse bg-slate-400'
+            }`}
+            role="status"
+            aria-label={status === 'online' ? 'Online' : status === 'offline' ? 'Offline' : 'Checking connection'}
+            title={status === 'online' ? 'Online' : status === 'offline' ? 'Offline' : 'Checking…'}
+          />
+
+          {/* Business logo in the top-right area (sm+; phones show it on the left) */}
           {businessName && logoUrl && (
             <img
               src={logoUrl}
               alt={businessName}
-              className="h-6 w-auto mr-2 inline-block vertical-middle"
+              className="mr-2 hidden h-6 w-auto align-middle sm:inline-block"
               style={{ maxHeight: '40px', objectFit: 'contain' }}
             />
           )}

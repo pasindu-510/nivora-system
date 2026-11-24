@@ -132,6 +132,19 @@
   }
 }
 
+/* ------------------------------ Mobile tables ------------------------------
+   Phones: keep each cell on one line (the table's wrapper scrolls sideways)
+   instead of wrapping dates/invoice numbers into 4-5 line rows, and tighten
+   the cell gutters. Bills (.bill-root) keep their own A4 layout. */
+@media (max-width: 639px) {
+  main table:not(.bill-root table) th,
+  main table:not(.bill-root table) td {
+    white-space: nowrap;
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+}
+
 /* --------------------------------- Print ---------------------------------
    A4 bill printing (sale invoice + installment receipt) from the sale
    detail page's bill-preview modal. Pressing "Print" in the modal keeps

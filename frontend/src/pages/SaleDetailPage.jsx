@@ -328,7 +328,7 @@ export default function SaleDetailPage() {
       <PageHeader
         title={`Sale ${sale.invoice_no || '—'}`}
         description={
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+          <div className="flex flex-col items-start sm:flex-row sm:items-center gap-2">
             <span className={`badge ${statusBadge.className}`}>{statusBadge.label}</span>
             <span className="text-sm text-slate-500">
               {sale.created_by_name || '—'} • {formatDateTime(sale.created_at)}
@@ -759,8 +759,8 @@ export default function SaleDetailPage() {
         {sale.payments && sale.payments.length > 0 ? (
           <div className="space-y-2 text-sm text-slate-900">
             {sale.payments.map((payment) => (
-              <div key={payment.id} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
-                <div className="flex items-center gap-3">
+              <div key={payment.id} className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 py-2 border-b border-slate-100 last:border-0">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
                   <span className="font-medium">
                     {sale.is_single_payment
                       ? 'Full payment'
@@ -775,7 +775,7 @@ export default function SaleDetailPage() {
                     {paymentMethodLabel(payment.method)}
                   </span>
                 </div>
-                <div className="text-right">
+                <div className="sm:text-right">
                   <span className="font-semibold">
                     {formatLKR(payment.amount)}
                   </span>
