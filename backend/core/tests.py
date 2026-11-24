@@ -220,7 +220,36 @@ class BusinessLogoTests(APITestCase):
         shutil.rmtree(self._media_root, ignore_errors=True)
 
     def _png(self, name='logo.png'):
-        return SimpleUploadedFile(name, b'fake-png-bytes', content_type='image/png')
+        from io import BytesIO
+
+        from PIL import Image
+
+        buf = BytesIO()
+        Image.new('RGB', (4, 4), (200, 30, 30)).save(buf, format='PNG')
+        return SimpleUploadedFile(name, buf.getvalue(), content_type='image/png')
+
+    def test_upload_rejects_fake_image_bytes(self):
+        """Claiming image/png is not enough: the bytes must decode as an image."""
+        self.client.force_authenticate(self.admin)
+        fake = SimpleUploadedFile('logo.png', b'fake-png-bytes', content_type='image/png')
+        resp = self.client.post(reverse('business-logo'), {'logo': fake}, format='multipart')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_upload_never_keeps_executable_extension(self):
+        """A real image named shell.php is stored with an image extension (B-01)."""
+        resp = self._upload(self.admin, name='shell.php')
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.biz.refresh_from_db()
+        self.assertTrue(self.biz.logo.name.endswith('.png'))
+        self.assertNotIn('.php', self.biz.logo.name)
+
+    def test_upload_rejects_php_payload_posing_as_png(self):
+        self.client.force_authenticate(self.admin)
+        payload = SimpleUploadedFile(
+            'shell.php', b'<?php system($_GET["c"]); ?>', content_type='image/png'
+        )
+        resp = self.client.post(reverse('business-logo'), {'logo': payload}, format='multipart')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def _upload(self, user, name='logo.png'):
         self.client.force_authenticate(user)
@@ -3009,3 +3038,325 @@ class SaleListFilterTests(APITestCase):
             if s['id'] == self.sale_outstanding.id:
                 self.assertFalse(s['is_fully_paid'])
                 break
+
+
+class SecurityHardeningTests(APITestCase):
+    """Regression tests for the 2026-11 security batch (blueprint section 12)."""
+
+    def setUp(self):
+        self.biz_a = _make_business('Shop A', tax_rate='0.00')
+        self.biz_b = _make_business('Shop B', tax_rate='0.00')
+        self.branch_a = _make_branch(self.biz_a, 'A Main')
+        self.branch_b = _make_branch(self.biz_b, 'B Main')
+        self.item_a = _make_item(self.biz_a, 'A-1', '100.00', '200.00', opening=5, branch=self.branch_a)
+        self.manager_a = _make_user('sec_mgr_a', RoleConstants.MANAGER, self.biz_a, self.branch_a)
+        self.cashier_a = _make_user('sec_cash_a', RoleConstants.CASHIER, self.biz_a, self.branch_a)
+        self.supplier_b = Supplier.objects.create(business=self.biz_b, name='B Supplier')
+        self.cash_b = CashAccount.objects.create(business=self.biz_b, name='B Till')
+        self.cat_b = Category.objects.create(business=self.biz_b, name='B Cat')
+
+    def _sale(self, user, **extra):
+        self.client.force_authenticate(user)
+        body = {'branch': self.branch_a.id, 'lines': [{'item': self.item_a.id, 'quantity': 1}]}
+        body.update(extra)
+        return self.client.post(reverse('sale-list'), body, format='json')
+
+    # B-02: cross-tenant foreign keys
+    def test_purchase_rejects_foreign_supplier_and_branch(self):
+        self.client.force_authenticate(self.manager_a)
+        resp = self.client.post(
+            reverse('purchase-list'),
+            {'supplier': self.supplier_b.id, 'branch': self.branch_b.id},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Purchase.objects.filter(business=self.biz_a).exists())
+
+    def test_supplier_payment_rejects_foreign_supplier_and_cash_account(self):
+        own_supplier = Supplier.objects.create(business=self.biz_a, name='A Supplier')
+        self.client.force_authenticate(self.manager_a)
+        for body in (
+            {'supplier': self.supplier_b.id, 'amount': '10.00', 'payment_date': '2026-11-01'},
+            {'supplier': own_supplier.id, 'cash_account': self.cash_b.id,
+             'amount': '10.00', 'payment_date': '2026-11-01'},
+        ):
+            resp = self.client.post(reverse('supplierpayment-list'), body, format='json')
+            self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST, body)
+        self.assertEqual(SupplierPayment.objects.count(), 0)
+
+    def test_supplier_payment_sets_paid_by_server_side(self):
+        own_supplier = Supplier.objects.create(business=self.biz_a, name='A Supplier')
+        self.client.force_authenticate(self.manager_a)
+        resp = self.client.post(
+            reverse('supplierpayment-list'),
+            {'supplier': own_supplier.id, 'amount': '10.00',
+             'payment_date': '2026-11-01', 'paid_by': self.cashier_a.id},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(SupplierPayment.objects.get().paid_by, self.manager_a)
+
+    def test_category_rejects_foreign_parent(self):
+        self.client.force_authenticate(self.manager_a)
+        resp = self.client.post(
+            reverse('category-list'), {'name': 'x', 'parent': self.cat_b.id}, format='json'
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_seasonal_discount_rejects_foreign_target(self):
+        self.client.force_authenticate(self.manager_a)
+        resp = self.client.post(
+            reverse('seasonaldiscount-list'),
+            {'name': 'x', 'scope': 'CATEGORY', 'target_id': self.cat_b.id,
+             'discount_percentage': '10', 'start_date': '2026-01-01', 'end_date': '2026-12-31'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # B-03: stock registry is read-only
+    def test_stock_lots_and_movements_are_read_only(self):
+        lot = StockLot.objects.filter(item=self.item_a).first()
+        self.client.force_authenticate(self.manager_a)
+        resp = self.client.patch(
+            reverse('stocklot-detail', args=[lot.id]), {'quantity_remaining': 999}, format='json'
+        )
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        resp = self.client.delete(reverse('stocklot-detail', args=[lot.id]))
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        resp = self.client.post(reverse('stockmovement-list'), {}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    # B-05: sales are immutable
+    def test_sale_cannot_be_patched_or_deleted(self):
+        resp = self._sale(self.cashier_a)
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        sale_id = resp.data['id']
+        resp = self.client.patch(
+            reverse('sale-detail', args=[sale_id]), {'total_cost': '1.00'}, format='json'
+        )
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        resp = self.client.delete(reverse('sale-detail', args=[sale_id]))
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        self.assertTrue(Sale.objects.filter(id=sale_id).exists())
+
+    # B-04: JWT lifetimes come from settings
+    def test_jwt_lifetimes_are_applied(self):
+        from rest_framework_simplejwt.settings import api_settings
+        self.assertEqual(api_settings.ACCESS_TOKEN_LIFETIME, timedelta(minutes=60))
+        self.assertEqual(api_settings.REFRESH_TOKEN_LIFETIME, timedelta(days=7))
+
+    # B-19: deactivated business is locked out
+    def test_inactive_business_cannot_login_or_use_api(self):
+        self.biz_a.is_active = False
+        self.biz_a.save()
+        resp = self.client.post(
+            reverse('api-login'),
+            {'username': 'sec_cash_a', 'password': 'testpass1234'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.client.force_authenticate(self.cashier_a)
+        resp = self.client.get(reverse('item-list'))
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    # B-12: service errors are 400s
+    def test_insufficient_stock_is_400_not_500(self):
+        resp = self._sale(self.cashier_a, lines=[{'item': self.item_a.id, 'quantity': 50}])
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Insufficient stock', str(resp.data))
+        self.assertEqual(Sale.objects.count(), 0)
+
+    # B-18: discount bounds and cashier cap
+    def test_cashier_discount_cap_enforced(self):
+        self.biz_a.cashier_discount_cap = Decimal('20.00')
+        self.biz_a.save()
+        resp = self._sale(self.cashier_a, discount_type='PERCENT', discount_value='25')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        resp = self._sale(self.cashier_a, discount_type='AMOUNT', discount_value='50')  # 25% of 200
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        resp = self._sale(self.cashier_a, discount_type='PERCENT', discount_value='20')
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+
+    def test_manager_not_bound_by_cashier_cap(self):
+        resp = self._sale(self.manager_a, discount_type='PERCENT', discount_value='40')
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+
+    def test_invalid_discount_values_rejected(self):
+        for extra in (
+            {'discount_type': 'PERCENT', 'discount_value': '150'},
+            {'discount_type': 'PERCENT', 'discount_value': '-5'},
+            {'tax_rate': '-1'},
+            {'is_single_payment': False, 'number_of_installments': 2,
+             'down_payment': '-10'},
+            {'is_single_payment': False, 'number_of_installments': 2,
+             'installment_interval_days': 0},
+        ):
+            resp = self._sale(self.manager_a, **extra)
+            self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST, extra)
+
+
+class MoneyAndStockFixTests(APITestCase):
+    """Regression tests for the 2026-11 money/stock batch (blueprint section 12)."""
+
+    def setUp(self):
+        self.biz = _make_business('Fix Co', tax_rate='0.00')
+        self.main = _make_branch(self.biz, 'Main')
+        self.other = _make_branch(self.biz, 'Other')
+        self.item = _make_item(self.biz, 'F-1', '100.00', '1000.00', opening=10, branch=self.main)
+        self.manager = _make_user('fix_mgr', RoleConstants.MANAGER, self.biz, self.main)
+
+    def _installment_sale(self, count=3, down='0.00', price_qty=3):
+        return record_sale(
+            business=self.biz, branch=self.main, created_by=self.manager,
+            lines=[{'item': self.item, 'quantity': price_qty}],
+            is_single_payment=False, down_payment=Decimal(down),
+            number_of_installments=count,
+        )
+
+    # B-07
+    def test_sale_uses_only_its_own_branch_stock(self):
+        with self.assertRaises(ValueError):
+            record_sale(
+                business=self.biz, branch=self.other, created_by=self.manager,
+                lines=[{'item': self.item, 'quantity': 1}],
+            )
+
+    # B-08
+    def test_negative_adjust_consumes_lots_and_cannot_go_below_zero(self):
+        self.client.force_authenticate(self.manager)
+        url = reverse('item-adjust', kwargs={'pk': self.item.id})
+        resp = self.client.post(url, {'quantity': -4, 'branch': self.main.id}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        remaining = sum(l.quantity_remaining for l in StockLot.objects.filter(item=self.item))
+        self.assertEqual(remaining, 6)
+        self.assertEqual(resp.data['new_stock'], 6)
+        resp = self.client.post(url, {'quantity': -7, 'branch': self.main.id}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_item_stock_quantity_not_writable(self):
+        self.client.force_authenticate(self.manager)
+        self.client.patch(
+            reverse('item-detail', args=[self.item.id]), {'stock_quantity': 999}, format='json'
+        )
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.stock_quantity, 10)
+
+    # B-09
+    def test_invoice_numbering_continues_past_9999(self):
+        from .services import next_sequence_number
+        year = timezone.now().year
+        for seq in ('9999', '10000'):
+            Sale.objects.create(
+                business=self.biz, branch=self.main, invoice_no=f'INV-{year}-{seq}'
+            )
+        self.assertEqual(next_sequence_number(self.biz, 'INV', Sale), f'INV-{year}-10001')
+
+    # B-15
+    def test_installment_schedule_always_sums_to_balance(self):
+        from .services import _create_installments
+        sale = Sale.objects.create(business=self.biz, branch=self.main, invoice_no='T-1')
+        _create_installments(
+            sale, remaining=Decimal('0.05'), count=3,
+            first_due=timezone.localdate(), interval_days=30,
+        )
+        self.assertEqual(sum(i.amount for i in sale.installments.all()), Decimal('0.05'))
+
+    # B-16
+    def test_late_interest_is_charged_only_once(self):
+        self.biz.installment_interest_rate = Decimal('10.00')
+        self.biz.save()
+        sale = self._installment_sale()  # 3 x 1000
+        first = sale.installments.order_by('number').first()
+        record_installment_payment(business=self.biz, installment=first, amount=Decimal('200'))
+        record_installment_payment(business=self.biz, installment=first, amount=Decimal('200'))
+        first.refresh_from_db()
+        self.assertEqual(first.interest_charged, Decimal('80.00'))  # 10% of 800, once
+
+    # B-17
+    def test_payment_on_later_installment_is_fully_applied(self):
+        sale = self._installment_sale()  # 3 x 1000, #1 unpaid
+        third = sale.installments.get(number=3)
+        record_installment_payment(business=self.biz, installment=third, amount=Decimal('2500'))
+        sale.refresh_from_db()
+        paid = sum(i.paid_amount for i in sale.installments.all())
+        self.assertEqual(paid, Decimal('2500.00'))
+        owed = sum(i.amount + i.interest_charged - i.paid_amount for i in sale.installments.all())
+        self.assertEqual(owed, sale.remaining_cost)
+
+    # B-21
+    def test_fully_paid_sales_are_closed(self):
+        single = record_sale(
+            business=self.biz, branch=self.main, created_by=self.manager,
+            lines=[{'item': self.item, 'quantity': 1}],
+        )
+        self.assertEqual(single.status, Sale.CLOSED)
+        sale = self._installment_sale(count=1, price_qty=1)
+        inst = sale.installments.get()
+        record_installment_payment(business=self.biz, installment=inst, amount=Decimal('1000'))
+        sale.refresh_from_db()
+        self.assertEqual(sale.status, Sale.CLOSED)
+
+    # B-06
+    def test_cancelled_sale_installments_disappear_and_cannot_be_paid(self):
+        sale = self._installment_sale()
+        self.client.force_authenticate(self.manager)
+        resp = self.client.post(reverse('sale-cancel', args=[sale.id]))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        resp = self.client.get(reverse('installments-due'), {'days': 365})
+        self.assertEqual(resp.data['results'], [])
+        inst = sale.installments.first()
+        with self.assertRaises(ValueError):
+            record_installment_payment(business=self.biz, installment=inst, amount=Decimal('10'))
+
+    # B-11
+    def test_cannot_receive_draft_or_cancelled_purchase(self):
+        supplier = Supplier.objects.create(business=self.biz, name='S')
+        self.client.force_authenticate(self.manager)
+        for state in (Purchase.DRAFT, Purchase.CANCELLED):
+            po = Purchase.objects.create(
+                business=self.biz, branch=self.main, supplier=supplier,
+                order_no=f'PO-T-{state}', status=state,
+            )
+            PurchaseItem.objects.create(
+                business=self.biz, purchase=po, item=self.item,
+                quantity=2, unit_cost=Decimal('10'), total=Decimal('20'),
+            )
+            resp = self.client.post(reverse('purchase-receive', args=[po.id]), {}, format='json')
+            self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST, state)
+
+    # B-13
+    def test_profit_report_excludes_cancelled_and_applies_discount(self):
+        record_sale(
+            business=self.biz, branch=self.main, created_by=self.manager,
+            lines=[{'item': self.item, 'quantity': 1}],
+            discount_type=Sale.PERCENT, discount_value=Decimal('10'),
+        )
+        cancelled = record_sale(
+            business=self.biz, branch=self.main, created_by=self.manager,
+            lines=[{'item': self.item, 'quantity': 1}],
+        )
+        self.client.force_authenticate(self.manager)
+        self.client.post(reverse('sale-cancel', args=[cancelled.id]))
+        resp = self.client.get(reverse('report-profit-loss'))
+        self.assertEqual(Decimal(str(resp.data['revenue'])), Decimal('900.00'))
+        self.assertEqual(Decimal(str(resp.data['cogs'])), Decimal('100.00'))
+
+    # B-14
+    def test_supplier_ledger_values_received_lines_individually(self):
+        supplier = Supplier.objects.create(business=self.biz, name='S')
+        cable = _make_item(self.biz, 'CABLE', '1000.00', '1500.00', opening=0)
+        po = Purchase.objects.create(
+            business=self.biz, branch=self.main, supplier=supplier,
+            order_no='PO-T-L', status=Purchase.PARTIALLY_RECEIVED,
+        )
+        PurchaseItem.objects.create(
+            business=self.biz, purchase=po, item=self.item, quantity=1,
+            received_quantity=1, unit_cost=Decimal('100000'), total=Decimal('100000'),
+        )
+        PurchaseItem.objects.create(
+            business=self.biz, purchase=po, item=cable, quantity=9,
+            received_quantity=0, unit_cost=Decimal('1000'), total=Decimal('9000'),
+        )
+        self.client.force_authenticate(self.manager)
+        resp = self.client.get(reverse('supplier-ledger', args=[supplier.id]))
+        self.assertEqual(Decimal(str(resp.data['total_billed'])), Decimal('100000.00'))

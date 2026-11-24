@@ -140,7 +140,10 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
-SIMPLEJWT = {
+# NOTE: djangorestframework-simplejwt reads ``SIMPLE_JWT`` (with underscore).
+# It was previously misspelled ``SIMPLEJWT``, so these lifetimes were ignored
+# and the library defaults (5 min access / 1 day refresh) applied.
+SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(
         minutes=int(os.environ.get('JWT_ACCESS_MINUTES', '60'))
     ),

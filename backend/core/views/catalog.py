@@ -6,6 +6,7 @@ from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from .. import services
 from ..models import Brand, Category, Item, StockLot, StockMovement
 from ..permissions import IsCashierOrAbove, IsManagerOrAbove
 from ..serializers import (
@@ -130,8 +131,25 @@ class ItemViewSet(TenantModelViewSet):
                 source=StockLot.ADJUSTMENT,
                 reference=reason,
             )
-        item.stock_quantity += quantity
-        item.save(update_fields=['stock_quantity'])
+        else:
+            # Write-off: remove the units from this branch's FIFO lots so the
+            # lots and stock_quantity stay in step (B-08). Refuse to go below
+            # zero instead of silently creating negative stock.
+            allocations, _cost, ok = services.allocate_fifo(
+                item.business, item, -quantity, branch
+            )
+            if not ok:
+                return Response(
+                    {'quantity': f'Not enough stock of {item.code} at {branch.name} '
+                                 f'to write off {-quantity} units.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            for lot, take in allocations:
+                StockLot.objects.filter(pk=lot.pk).update(
+                    quantity_remaining=F('quantity_remaining') - take
+                )
+        Item.objects.filter(pk=item.pk).update(stock_quantity=F('stock_quantity') + quantity)
+        item.refresh_from_db(fields=['stock_quantity'])
         StockMovement.objects.create(
             business=item.business,
             branch=branch,

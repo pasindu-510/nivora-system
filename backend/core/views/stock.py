@@ -19,6 +19,8 @@ class StockLotViewSet(TenantModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['item', 'branch', 'source', 'item__category']
     ordering_fields = ['received_at', 'quantity_remaining']
+    # Lots change only through sales, receipts and adjustments (B-03).
+    http_method_names = ['get', 'head', 'options']
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -37,3 +39,5 @@ class StockMovementViewSet(TenantModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['item', 'branch', 'type']
     ordering_fields = ['created_at']
+    # Audit trail: never writable through the API (B-03).
+    http_method_names = ['get', 'head', 'options']

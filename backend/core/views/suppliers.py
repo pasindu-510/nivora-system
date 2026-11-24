@@ -22,6 +22,7 @@ from ..serializers import (
     _cents,
 )
 from ..services import next_sequence_number
+from .reports import received_value_of
 from ..viewsets import TenantModelViewSet
 
 
@@ -67,13 +68,8 @@ class SupplierViewSet(TenantModelViewSet):
         total_billed = Decimal('0.00')
         for purchase in purchases:
             line_total = sum((i.total for i in purchase.items.all()), Decimal('0.00'))
-            ordered_qty = sum(i.quantity for i in purchase.items.all())
-            received_qty = sum(i.received_quantity for i in purchase.items.all())
-            # Value the goods actually received, not the whole order.
-            received_value = (
-                _cents(line_total * Decimal(received_qty) / Decimal(ordered_qty))
-                if ordered_qty else _cents(0)
-            )
+            # Value the goods actually received, line by line (B-14).
+            received_value = _cents(received_value_of(purchase))
             total_billed += received_value
             purchase_rows.append({
                 'id': purchase.id,
@@ -118,18 +114,34 @@ class PurchaseViewSet(TenantModelViewSet):
             return PurchaseListSerializer
         return PurchaseDetailSerializer
 
+    def destroy(self, request, *args, **kwargs):
+        """Only drafts may be deleted; anything placed is history (B-11)."""
+        purchase = self.get_object()
+        if purchase.status != Purchase.DRAFT:
+            return Response(
+                {'detail': 'Only draft orders can be deleted. Cancel it instead.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
+
     def create(self, request, *args, **kwargs):
-        ser = PurchaseCreateSerializer(data=request.data)
+        # Context is required so supplier/branch are scoped to the caller's
+        # business (B-02): without it any tenant's ids were accepted.
+        ser = PurchaseCreateSerializer(data=request.data, context={'request': request})
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
-        purchase = Purchase.objects.create(
-            business=request.user.business,
-            branch=data['branch'],
-            supplier=data['supplier'],
-            expected_delivery_date=data.get('expected_delivery_date'),
-            notes=data.get('notes', ''),
-            ordered_by=request.user,
-            order_no=next_sequence_number(request.user.business, 'PO', Purchase, 'order_no'),
+        business = request.user.business
+        purchase = services._create_numbered(
+            Purchase, 'order_no',
+            lambda: next_sequence_number(business, 'PO', Purchase, 'order_no'),
+            dict(
+                business=business,
+                branch=data['branch'],
+                supplier=data['supplier'],
+                expected_delivery_date=data.get('expected_delivery_date'),
+                notes=data.get('notes', ''),
+                ordered_by=request.user,
+            ),
         )
         return Response(
             PurchaseDetailSerializer(purchase).data, status=status.HTTP_201_CREATED
@@ -139,9 +151,9 @@ class PurchaseViewSet(TenantModelViewSet):
     def add_item(self, request, pk=None):
         """Add an item line to a draft/ordered purchase."""
         purchase = self.get_object()
-        if purchase.status == Purchase.RECEIVED:
+        if purchase.status in (Purchase.RECEIVED, Purchase.CANCELLED):
             return Response(
-                {'detail': 'Cannot add items to a fully received order.'},
+                {'detail': 'Cannot add items to a received or cancelled order.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         ser = PurchaseItemCreateSerializer(
@@ -223,10 +235,21 @@ class PurchaseViewSet(TenantModelViewSet):
         :func:`core.services.record_purchase_receipt`.
         """
         purchase = self.get_object()
+        if purchase.status not in (Purchase.ORDERED, Purchase.PARTIALLY_RECEIVED):
+            return Response(
+                {'detail': 'Only placed (ordered) purchase orders can be received.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         ser = PurchaseReceiptCreateSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         quantities = ser.validated_data.get('quantities') or {}
-        quantities = {int(k): int(v) for k, v in quantities.items()}
+        try:
+            quantities = {int(k): int(v) for k, v in quantities.items()}
+        except (TypeError, ValueError):
+            return Response(
+                {'quantities': 'Quantities must be whole numbers keyed by line id.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         _, receipt = services.record_purchase_receipt(
             business=request.user.business,
             branch=purchase.branch,

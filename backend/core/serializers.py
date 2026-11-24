@@ -61,27 +61,69 @@ def _cents(n):
     return Decimal(n).quantize(Decimal('0.01'))
 
 
+def _request_business(serializer):
+    """The caller's business from the serializer context, or None."""
+    request = serializer.context.get('request') if serializer.context else None
+    user = getattr(request, 'user', None)
+    if user is None or not getattr(user, 'is_authenticated', False):
+        return None
+    return getattr(user, 'business', None)
+
+
+def scope_related_fields(serializer, business):
+    """Restrict every writable FK field to rows of ``business`` (B-02).
+
+    DRF's ``PrimaryKeyRelatedField`` defaults to ``Model.objects.all()``,
+    which lets a caller reference another tenant's supplier, branch, cash
+    account, … by id. Any related model that carries a ``business`` FK is
+    narrowed to the caller's tenant; with no tenant the field accepts nothing.
+    """
+    for field in serializer.fields.values():
+        rel = getattr(field, 'child_relation', field)
+        if not isinstance(rel, serializers.PrimaryKeyRelatedField) or rel.read_only:
+            continue
+        queryset = rel.queryset
+        if queryset is None:
+            continue
+        model = queryset.model
+        has_business = any(f.name == 'business' for f in model._meta.get_fields())
+        if not has_business:
+            continue
+        rel.queryset = (
+            model._default_manager.filter(business=business)
+            if business is not None else model._default_manager.none()
+        )
+
+
+class TenantModelSerializer(serializers.ModelSerializer):
+    """ModelSerializer whose FK inputs are scoped to the caller's business."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        scope_related_fields(self, _request_business(self))
+
+
 # ── Simple CRUD serializers ─────────────────────────────────────────────────
 
-class BranchSerializer(serializers.ModelSerializer):
+class BranchSerializer(TenantModelSerializer):
     class Meta:
         model = Branch
         fields = ['id', 'name', 'address', 'phone', 'is_active', 'created_at']
 
 
-class CategorySerializer(serializers.ModelSerializer):
+class CategorySerializer(TenantModelSerializer):
     class Meta:
         model = Category
         fields = ['id', 'name', 'parent', 'created_at']
 
 
-class BrandSerializer(serializers.ModelSerializer):
+class BrandSerializer(TenantModelSerializer):
     class Meta:
         model = Brand
         fields = ['id', 'name', 'created_at']
 
 
-class ItemListSerializer(serializers.ModelSerializer):
+class ItemListSerializer(TenantModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True, default='')
     brand_name = serializers.CharField(source='brand.name', read_only=True, default='')
     branch_stock = serializers.SerializerMethodField()
@@ -96,6 +138,9 @@ class ItemListSerializer(serializers.ModelSerializer):
             'low_stock_threshold', 'is_active', 'image', 'branch_stock',
             'effective_price', 'discount_percent',
         ]
+        # Stock only changes through opening stock, receipts, sales and
+        # adjustments, which keep the FIFO lots in step (B-08).
+        read_only_fields = ['stock_quantity']
 
     def _discount_rows(self):
         """Active seasonal discounts, fetched once per serializer instance.
@@ -235,7 +280,7 @@ class ItemCreateSerializer(ItemDetailSerializer):
         return attrs
 
 
-class CustomerSerializer(serializers.ModelSerializer):
+class CustomerSerializer(TenantModelSerializer):
     class Meta:
         model = Customer
         fields = [
@@ -244,7 +289,7 @@ class CustomerSerializer(serializers.ModelSerializer):
         ]
 
 
-class SupplierSerializer(serializers.ModelSerializer):
+class SupplierSerializer(TenantModelSerializer):
     class Meta:
         model = Supplier
         fields = [
@@ -253,7 +298,7 @@ class SupplierSerializer(serializers.ModelSerializer):
         ]
 
 
-class CashAccountSerializer(serializers.ModelSerializer):
+class CashAccountSerializer(TenantModelSerializer):
     balance = serializers.SerializerMethodField()
 
     class Meta:
@@ -267,13 +312,13 @@ class CashAccountSerializer(serializers.ModelSerializer):
         return services.account_balances(self.context['request'].user.business).get(obj.id, 0)
 
 
-class ExpenseCategorySerializer(serializers.ModelSerializer):
+class ExpenseCategorySerializer(TenantModelSerializer):
     class Meta:
         model = ExpenseCategory
         fields = ['id', 'name', 'is_active']
 
 
-class StockLotSerializer(serializers.ModelSerializer):
+class StockLotSerializer(TenantModelSerializer):
     item_code = serializers.CharField(source='item.code', read_only=True)
     item_name = serializers.CharField(source='item.name', read_only=True)
 
@@ -286,7 +331,7 @@ class StockLotSerializer(serializers.ModelSerializer):
         ]
 
 
-class StockMovementSerializer(serializers.ModelSerializer):
+class StockMovementSerializer(TenantModelSerializer):
     item_code = serializers.CharField(source='item.code', read_only=True)
 
     class Meta:
@@ -328,7 +373,7 @@ class InstallmentSerializer(serializers.ModelSerializer):
         ]
 
 
-class PaymentSerializer(serializers.ModelSerializer):
+class PaymentSerializer(TenantModelSerializer):
     cash_account_name = serializers.CharField(
         source='cash_account.name', read_only=True, default=''
     )
@@ -422,20 +467,23 @@ class SaleCreateSerializer(serializers.Serializer):
         choices=Sale.DISCOUNT_TYPE_CHOICES, default=Sale.PERCENT
     )
     discount_value = serializers.DecimalField(
-        max_digits=12, decimal_places=2, default=0
+        max_digits=12, decimal_places=2, default=0, min_value=Decimal('0')
     )
     tax_rate = serializers.DecimalField(
-        max_digits=5, decimal_places=2, required=False, allow_null=True
+        max_digits=5, decimal_places=2, required=False, allow_null=True,
+        min_value=Decimal('0'), max_value=Decimal('100'),
     )
     is_single_payment = serializers.BooleanField(default=True)
     down_payment = serializers.DecimalField(
-        max_digits=12, decimal_places=2, default=0
+        max_digits=12, decimal_places=2, default=0, min_value=Decimal('0')
     )
     number_of_installments = serializers.IntegerField(default=0, min_value=0)
     installment_frequency = serializers.ChoiceField(
         choices=Sale.FREQUENCY_CHOICES, default=Sale.MONTHLY
     )
-    installment_interval_days = serializers.IntegerField(default=30)
+    installment_interval_days = serializers.IntegerField(
+        default=30, min_value=1, max_value=366
+    )
     cash_account = serializers.PrimaryKeyRelatedField(
         queryset=CashAccount.objects.none(), required=False, allow_null=True
     )
@@ -454,7 +502,14 @@ class SaleCreateSerializer(serializers.Serializer):
             line_fields['item'].queryset = Item.objects.for_business(business)
 
     def validate(self, attrs):
-        """Validate installment count against business maximum limit."""
+        """Validate discount bounds and installment count against business limits."""
+        if (
+            attrs.get('discount_type', Sale.PERCENT) == Sale.PERCENT
+            and attrs.get('discount_value', 0) > 100
+        ):
+            raise serializers.ValidationError(
+                {'discount_value': 'A percentage discount cannot exceed 100%.'}
+            )
         request = self.context.get('request')
         if request and getattr(request, 'user', None) and request.user.is_authenticated:
             business = getattr(request.user, 'business', None)
@@ -478,7 +533,21 @@ class SaleCreateSerializer(serializers.Serializer):
         user = request.user
         lines = [{'item': l['item'], 'quantity': l['quantity']}
                  for l in validated_data['lines']]
+        # Cashiers may only give spot discounts up to the business cap (B-18).
+        max_discount_percent = (
+            user.business.cashier_discount_cap
+            if user.role == RoleConstants.CASHIER else None
+        )
+        try:
+            return self._record(user, lines, validated_data, max_discount_percent)
+        except ValueError as exc:
+            # Service-level rule violations (insufficient stock, bad down
+            # payment, …) are client errors, not server errors (B-12).
+            raise serializers.ValidationError({'detail': str(exc)})
+
+    def _record(self, user, lines, validated_data, max_discount_percent):
         sale = services.record_sale(
+            max_discount_percent=max_discount_percent,
             business=user.business,
             branch=validated_data['branch'],
             created_by=user,
@@ -540,7 +609,7 @@ class InstallmentPaymentSerializer(serializers.Serializer):
 
 # ── Purchases (spec 6) ──────────────────────────────────────────────────────
 
-class PurchaseItemSerializer(serializers.ModelSerializer):
+class PurchaseItemSerializer(TenantModelSerializer):
     item_code = serializers.CharField(source='item.code', read_only=True)
     item_name = serializers.CharField(source='item.name', read_only=True)
 
@@ -593,7 +662,7 @@ class PurchaseDetailSerializer(PurchaseListSerializer):
         fields = PurchaseListSerializer.Meta.fields + ['notes', 'items', 'receipts']
 
 
-class PurchaseCreateSerializer(serializers.ModelSerializer):
+class PurchaseCreateSerializer(TenantModelSerializer):
     class Meta:
         model = Purchase
         fields = [
@@ -631,7 +700,7 @@ class PurchaseReceiptCreateSerializer(serializers.Serializer):
 
 # ── Expenses / bookkeeping (spec 6) ─────────────────────────────────────────
 
-class ExpenseSerializer(serializers.ModelSerializer):
+class ExpenseSerializer(TenantModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)
     branch_name = serializers.CharField(source='branch.name', read_only=True, default='')
 
@@ -642,6 +711,8 @@ class ExpenseSerializer(serializers.ModelSerializer):
             'description', 'amount', 'expense_date', 'cash_account',
             'paid_by', 'note', 'created_at',
         ]
+        read_only_fields = ['paid_by']
+        extra_kwargs = {'amount': {'min_value': Decimal('0.01')}}
 
 
 class ExpenseCreateSerializer(serializers.Serializer):
@@ -683,13 +754,13 @@ class ExpenseCreateSerializer(serializers.Serializer):
         )
 
 
-class CapitalEntrySerializer(serializers.ModelSerializer):
+class CapitalEntrySerializer(TenantModelSerializer):
     class Meta:
         model = CapitalEntry
         fields = ['id', 'date', 'type', 'amount', 'note', 'created_at']
 
 
-class SupplierPaymentSerializer(serializers.ModelSerializer):
+class SupplierPaymentSerializer(TenantModelSerializer):
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
 
     class Meta:
@@ -698,9 +769,20 @@ class SupplierPaymentSerializer(serializers.ModelSerializer):
             'id', 'supplier', 'supplier_name', 'purchase', 'amount',
             'payment_date', 'cash_account', 'paid_by', 'note', 'created_at',
         ]
+        read_only_fields = ['paid_by']
+        extra_kwargs = {'amount': {'min_value': Decimal('0.01')}}
+
+    def validate(self, attrs):
+        supplier = attrs.get('supplier', getattr(self.instance, 'supplier', None))
+        purchase = attrs.get('purchase', getattr(self.instance, 'purchase', None))
+        if purchase is not None and supplier is not None and purchase.supplier_id != supplier.id:
+            raise serializers.ValidationError(
+                {'purchase': 'This purchase order belongs to a different supplier.'}
+            )
+        return attrs
 
 
-class RecurringExpenseSerializer(serializers.ModelSerializer):
+class RecurringExpenseSerializer(TenantModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)
 
     class Meta:
@@ -835,13 +917,40 @@ class BusinessFinanceSettingsSerializer(serializers.ModelSerializer):
 
 # ── Seasonal discounts ──────────────────────────────────────────────────────
 
-class SeasonalDiscountSerializer(serializers.ModelSerializer):
+class SeasonalDiscountSerializer(TenantModelSerializer):
     class Meta:
         model = SeasonalDiscount
         fields = [
             'id', 'name', 'scope', 'target_id', 'discount_percentage',
             'start_date', 'end_date', 'is_active', 'created_at',
         ]
+        extra_kwargs = {
+            'discount_percentage': {'min_value': Decimal('0.01'), 'max_value': Decimal('100')},
+        }
+
+    TARGET_MODELS = {
+        SeasonalDiscount.CATEGORY: Category,
+        SeasonalDiscount.BRAND: Brand,
+        SeasonalDiscount.ITEM: Item,
+    }
+
+    def validate(self, attrs):
+        scope = attrs.get('scope', getattr(self.instance, 'scope', None))
+        target_id = attrs.get('target_id', getattr(self.instance, 'target_id', None))
+        start = attrs.get('start_date', getattr(self.instance, 'start_date', None))
+        end = attrs.get('end_date', getattr(self.instance, 'end_date', None))
+        if start and end and end < start:
+            raise serializers.ValidationError({'end_date': 'End date must be on or after start date.'})
+        model = self.TARGET_MODELS.get(scope)
+        if model is not None:
+            business = _request_business(self)
+            if target_id is None or business is None or not model.objects.filter(
+                pk=target_id, business=business
+            ).exists():
+                raise serializers.ValidationError(
+                    {'target_id': f'Choose a valid {scope.lower()} from your business.'}
+                )
+        return attrs
 
 
 # ── Report helpers ──────────────────────────────────────────────────────────

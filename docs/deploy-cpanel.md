@@ -95,7 +95,7 @@ DB_USER=<cpaneluser>_shop
 DB_PASSWORD=<password from Phase 2>
 DB_HOST=localhost
 DB_PORT=3306
-DB_CONN_MAX_AGE=60
+DB_CONN_MAX_AGE=0
 
 CORS_ALLOWED_ORIGINS=https://system.nivora.lk
 
@@ -269,6 +269,8 @@ touch tmp/restart.txt
 | CORS error in browser console | `CORS_ALLOWED_ORIGINS` must be exactly `https://system.nivora.lk` (no trailing slash) |
 | Logos 404 | `MEDIA_ROOT` points somewhere Apache can't see; media must live under `public_html/system/media` |
 | Django admin has no CSS | `STATIC_URL` must be the absolute SPA origin URL and `collectstatic` must have run |
+| 503 "Service Unavailable" on the API, `stderr.log` shows `lswsgi_wrapper: … /opt/alt/python3XX/bin/lswsgi: No such file or directory` | LiteSpeed's Python connector is missing on the server — only the host can install it (open a ticket quoting the log line) |
+| `OperationalError (2013, 'Lost connection to MySQL server')` | Host kills idle MySQL connections: set `DB_CONN_MAX_AGE=0` in `.env`; create the superuser non-interactively (`read -s DJANGO_SUPERUSER_PASSWORD; export DJANGO_SUPERUSER_PASSWORD; manage.py createsuperuser --noinput --username X --role super_admin`) |
 | Page loads but login hangs | Topbar "Checking…" stuck → backend down or `ALLOWED_HOSTS`/CORS wrong; check health URL directly |
 
 ---

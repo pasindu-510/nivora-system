@@ -18,6 +18,9 @@ Security:
 
 import os
 import uuid
+from io import BytesIO
+
+from PIL import Image
 
 from rest_framework import status
 from rest_framework.permissions import BasePermission
@@ -32,23 +35,44 @@ from ..models import RoleConstants
 
 # Accepted image content types; anything else is rejected with a 400.
 ALLOWED_CONTENT_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
+# Pillow format name -> extension we write to disk (never the client's).
+FORMAT_EXTENSIONS = {'JPEG': '.jpg', 'PNG': '.png', 'GIF': '.gif', 'WEBP': '.webp'}
+MAX_LOGO_BYTES = 2 * 1024 * 1024
 
 
 def _store_logo(uploaded_file):
     """Validate and store the uploaded image under MEDIA_ROOT/business_logos/.
 
-    Returns the relative storage path (e.g. ``business_logos/abc_xyz.jpg``) that
+    Returns the relative storage path (e.g. ``business_logos/abc_xyz.png``) that
     can be assigned straight to ``Business.logo``. Raises ValueError when the
-    content type is not an allowed image.
+    file is not a real JPEG/PNG/GIF/WebP image.
+
+    Security: the client-supplied content type and filename are NOT trusted.
+    The bytes are decoded with Pillow and the stored extension is derived from
+    the detected image format, so a file such as ``shell.php`` sent as
+    ``image/png`` can never be written with an executable extension into the
+    web-served media directory.
     """
     if uploaded_file.content_type not in ALLOWED_CONTENT_TYPES:
         raise ValueError('Only JPEG, PNG, GIF and WebP images are allowed.')
+    if uploaded_file.size and uploaded_file.size > MAX_LOGO_BYTES:
+        raise ValueError('Logo must be 2 MB or smaller.')
 
-    ext = os.path.splitext(uploaded_file.name)[1] or '.jpg'
+    data = uploaded_file.read()
+    try:
+        with Image.open(BytesIO(data)) as img:
+            detected = img.format
+            img.verify()
+    except Exception:
+        raise ValueError('Only JPEG, PNG, GIF and WebP images are allowed.')
+    ext = FORMAT_EXTENSIONS.get(detected)
+    if ext is None:
+        raise ValueError('Only JPEG, PNG, GIF and WebP images are allowed.')
+
     safe_name = f"{uuid.uuid4().hex[:12]}{ext}"
     return default_storage.save(
         os.path.join('business_logos', safe_name),
-        ContentFile(uploaded_file.read()),
+        ContentFile(data),
     )
 
 

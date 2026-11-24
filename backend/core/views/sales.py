@@ -1,4 +1,6 @@
 """Sales, installments and payment endpoints (spec 6.4)."""
+from django.db import transaction
+from django.db.models import F
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
@@ -6,6 +8,7 @@ from rest_framework.response import Response
 
 from ..models import (
     Installment,
+    Item,
     LotAllocation,
     Payment,
     RoleConstants,
@@ -43,6 +46,10 @@ class SaleViewSet(TenantModelViewSet):
     filterset_fields = ['status', 'branch', 'customer', 'is_single_payment']
     search_fields = ['invoice_no', 'customer__name', 'customer__phone']
     ordering_fields = ['created_at', 'invoice_no']
+    # Sales are immutable financial records: create via POST, change state only
+    # through the pay_installment / cancel actions. Generic PUT/PATCH/DELETE
+    # would let any staff member rewrite totals or erase invoices (B-05).
+    http_method_names = ['get', 'post', 'head', 'options']
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -151,17 +158,41 @@ class SaleViewSet(TenantModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Reverse FIFO allocations for each sale item
-        for sale_item in sale.items.all():
+        with transaction.atomic():
+            # Re-read under a row lock: a concurrent cancel or payment must
+            # not interleave with the stock reversal (B-06 / B-10).
+            sale = Sale.objects.select_for_update().get(pk=sale.pk)
+            if sale.status == Sale.CANCELLED:
+                return Response(
+                    {'detail': 'Sale is already cancelled.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            self._reverse_stock(sale, request.user)
+            sale.status = Sale.CANCELLED
+            sale.remaining_cost = 0
+            sale.save(update_fields=['status', 'remaining_cost'])
+
+        # Return refreshed sale detail (mirror pay_installment)
+        sale.refresh_from_db()
+        sale._prefetched_objects_cache = {}
+        return Response(
+            SaleDetailSerializer(sale, context={'request': request}).data
+        )
+
+    @staticmethod
+    def _reverse_stock(sale, user):
+        """Put every sold unit back into the lots it came from."""
+        for sale_item in sale.items.select_related('item').all():
             # Restore lot quantities
             for allocation in sale_item.allocations.all():
-                lot = allocation.stock_lot
-                lot.quantity_remaining += allocation.quantity
-                lot.save(update_fields=['quantity_remaining'])
+                StockLot.objects.filter(pk=allocation.stock_lot_id).update(
+                    quantity_remaining=F('quantity_remaining') + allocation.quantity
+                )
 
             # Restore item stock_quantity
-            sale_item.item.stock_quantity += sale_item.quantity
-            sale_item.item.save(update_fields=['stock_quantity'])
+            Item.objects.filter(pk=sale_item.item_id).update(
+                stock_quantity=F('stock_quantity') + sale_item.quantity
+            )
 
             # Create reversing StockMovement (type ADJUST with positive quantity)
             StockMovement.objects.create(
@@ -172,20 +203,8 @@ class SaleViewSet(TenantModelViewSet):
                 quantity=sale_item.quantity,
                 reference=sale.invoice_no,
                 note=f'Cancelled sale {sale.invoice_no}',
-                created_by=request.user,
+                created_by=user,
             )
-
-        # Update sale status and remaining_cost
-        sale.status = Sale.CANCELLED
-        sale.remaining_cost = 0
-        sale.save(update_fields=['status', 'remaining_cost'])
-
-        # Return refreshed sale detail (mirror pay_installment)
-        sale.refresh_from_db()
-        sale._prefetched_objects_cache = {}
-        return Response(
-            SaleDetailSerializer(sale, context={'request': request}).data
-        )
 
 
 class PaymentViewSet(TenantModelViewSet):

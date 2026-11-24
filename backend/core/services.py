@@ -13,10 +13,11 @@ model boundaries:
 All mutating functions run inside ``transaction.atomic``.
 """
 from datetime import timedelta
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import F, Sum
+from django.db.models.functions import Length
 from django.utils import timezone
 
 from .models import (
@@ -46,9 +47,12 @@ def next_sequence_number(business, prefix, model, field='invoice_no'):
     """
     year = timezone.now().year
     prefix_base = f'{prefix}-{year}-'
+    # Order by length first: plain string ordering puts "…-10000" before
+    # "…-9999", which made the sequence repeat after 9999 (B-09).
     last = (
         model.objects.filter(**{f'{field}__startswith': prefix_base})
-        .order_by(f'-{field}')
+        .annotate(_num_len=Length(field))
+        .order_by('-_num_len', f'-{field}')
         .first()
     )
     if last is None:
@@ -62,25 +66,48 @@ def next_sequence_number(business, prefix, model, field='invoice_no'):
     return f'{prefix_base}{seq:04d}'
 
 
+def _create_numbered(model, field, make_number, fields, attempts=5):
+    """Create a row whose ``field`` is a sequence number, retrying on clashes.
+
+    Two requests computing the next number at the same moment would both
+    pick the same value; the unique constraint rejects the second insert.
+    Each attempt runs in a savepoint so a clash can be retried with a fresh
+    number without aborting the surrounding transaction (B-10).
+    """
+    for attempt in range(attempts):
+        try:
+            with transaction.atomic():
+                return model.objects.create(**{field: make_number()}, **fields)
+        except IntegrityError:
+            if attempt == attempts - 1:
+                raise
+
+
 # ── FIFO engine (spec 5.1) ──────────────────────────────────────────────────
 
-def _available_lots(business, item):
-    """Return open stock lots for an item ordered FIFO (oldest first)."""
-    return list(
-        StockLot.objects.filter(
-            business=business, item=item, quantity_remaining__gt=0,
-        ).order_by('received_at', 'id')
+def _available_lots(business, item, branch=None):
+    """Return open stock lots for an item ordered FIFO (oldest first).
+
+    Rows are locked (``SELECT … FOR UPDATE``) so two concurrent sales cannot
+    both consume the last units (B-10). When ``branch`` is given only that
+    branch's lots are eligible: stock is physically per branch (B-07).
+    """
+    qs = StockLot.objects.select_for_update().filter(
+        business=business, item=item, quantity_remaining__gt=0,
     )
+    if branch is not None:
+        qs = qs.filter(branch=branch)
+    return list(qs.order_by('received_at', 'id'))
 
 
-def allocate_fifo(business, item, quantity):
+def allocate_fifo(business, item, quantity, branch=None):
     """Consume ``quantity`` of ``item`` from FIFO lots.
 
     Returns ``(allocations, unit_cost, ok)`` where ``allocations`` is a list
     of ``(lot, qty)`` and ``unit_cost`` is the weighted-average cost of the
     consumed stock. ``ok`` is False when insufficient stock exists.
     """
-    lots = _available_lots(business, item)
+    lots = _available_lots(business, item, branch)
     remaining = quantity
     allocations = []
     total_cost = Decimal(0)
@@ -105,7 +132,8 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
                 tax_rate=None, is_single_payment=True, down_payment=0,
                 number_of_installments=0,
                 installment_frequency=Sale.MONTHLY,
-                installment_interval_days=30, cash_account=None):
+                installment_interval_days=30, cash_account=None,
+                max_discount_percent=None):
     """Create a sale with items, FIFO costs, installments and payments.
 
     ``lines`` is a list of ``{'item': Item, 'quantity': int}``.
@@ -140,9 +168,9 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
         line_total = unit_price * quantity
         subtotal += line_total
 
-        allocations, fifo_cost, ok = allocate_fifo(business, item, quantity)
+        allocations, fifo_cost, ok = allocate_fifo(business, item, quantity, branch)
         if not ok:
-            raise ValueError(f'Insufficient stock for {item.code}.')
+            raise ValueError(f'Insufficient stock for {item.code} at {branch.name}.')
         prepared_lines.append({
             'item': item, 'quantity': quantity,
             'unit_price': unit_price, 'line_total': line_total,
@@ -156,14 +184,25 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
     else:
         discount_amount = min(discount_value, subtotal).quantize(Decimal('0.01'))
 
+    # Spot-discount cap (cashiers): applies to both percent and flat amounts,
+    # measured as a share of the subtotal.
+    if max_discount_percent is not None and subtotal > 0:
+        cap_amount = (subtotal * Decimal(max_discount_percent) / Decimal(100)).quantize(
+            Decimal('0.01')
+        )
+        if discount_amount > cap_amount:
+            raise ValueError(
+                f'Discount exceeds the cashier limit of {Decimal(max_discount_percent):.2f}%. '
+                'Ask a manager to apply it.'
+            )
+
     taxable_base = subtotal - discount_amount
     tax_amount = (taxable_base * effective_tax_rate / Decimal(100)).quantize(Decimal('0.01'))
     total_cost = (taxable_base + tax_amount).quantize(Decimal('0.01'))
 
-    sale = Sale.objects.create(
+    sale_fields = dict(
         business=business, branch=branch, customer=customer,
         created_by=created_by,
-        invoice_no=next_sequence_number(business, 'INV', Sale),
         subtotal=subtotal,
         discount_type=discount_type,
         discount_value=discount_value,
@@ -177,6 +216,9 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
         remaining_cost=total_cost,
         installment_frequency=installment_frequency,
         installment_interval_days=installment_interval_days,
+    )
+    sale = _create_numbered(
+        Sale, 'invoice_no', lambda: next_sequence_number(business, 'INV', Sale), sale_fields
     )
 
     for prep in prepared_lines:
@@ -209,6 +251,7 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
     if is_single_payment:
         sale.down_payment = total_cost
         sale.remaining_cost = Decimal(0)
+        sale.status = Sale.CLOSED  # fully paid at the till (B-21)
         Payment.objects.create(
             business=business, sale=sale, amount=total_cost,
             method=Payment.CASH, cash_account=cash_account,
@@ -237,7 +280,7 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
                 received_by=created_by,
             )
 
-    sale.save(update_fields=['down_payment', 'remaining_cost'])
+    sale.save(update_fields=['down_payment', 'remaining_cost', 'status'])
     return sale
 
 
@@ -247,7 +290,10 @@ def _create_installments(sale, *, remaining, count, first_due, interval_days):
     The rounding remainder is distributed across the earlier installments
     so that the sum of installment amounts exactly equals ``remaining``.
     """
-    base = (remaining / count).quantize(Decimal('0.01'))
+    # Round DOWN so the leftover is never negative; the spare cents are then
+    # added to the earliest installments. Rounding half-up could make the
+    # schedule sum exceed the balance with no way to correct it (B-15).
+    base = (remaining / count).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
     sizes = [base] * count
     leftover = remaining - sum(sizes)
     leftover_cents = int((leftover * 100).to_integral_value())
@@ -272,126 +318,93 @@ def _create_installments(sale, *, remaining, count, first_due, interval_days):
 def record_installment_payment(*, business, installment, amount,
                                method=Payment.CASH, cash_account=None,
                                received_by=None):
-    """Record a payment against an installment and re-check its status.
+    """Record a payment against an installment.
 
-    New behavior:
-    - a. amount <= 0 → ValueError('Payment amount must be positive.')
-    - b. installment.is_paid → ValueError('Installment already fully paid.')
-       (is_paid now means fully settled incl. interest).
-    - c. REJECT overpayment beyond the whole sale:
-       if amount > sale.remaining_cost → ValueError('Payment exceeds balance due.')
-    - d. Roll-forward: apply the payment to installments ordered by number,
-       STARTING at the selected installment.  For each installment:
-         due = max(0, inst.amount + inst.interest_charged - inst.paid_amount)
-         take = min(due, remaining)
-         add to inst.paid_amount; set is_paid=True, paid_date when
-         paid_amount >= inst.amount + inst.interest_charged;
-         subtract from remaining; stop when remaining <= 0.
-         Skip installments whose due <= 0.
-    - e. One-time interest (ONLY on the SELECTED installment, only if still
-       short of principal AFTER this payment):
-         shortfall = max(0, installment.amount - installment.paid_amount)
-         if shortfall > 0 and business.installment_interest_rate > 0:
-           interest = (shortfall * Decimal(business.installment_interest_rate) / Decimal(100))
-           .quantize(Decimal('0.01'))
-           ; add to installment.interest_charged; this raises total owed.
-       An exact full payment of the selected installment → shortfall 0 → NO interest.
-    - f. Create ONE Payment row (total amount, method, cash_account, received_by,
-       installment=installment, created_at=now).
-    - g. sale.remaining_cost = F('remaining_cost') - amount + interest
-       (net: payment reduces, interest raises).  USE F() expression and save
-       with update_fields.  Keep @transaction.atomic.
+    Rules (blueprint section 5.5):
+
+    a. ``amount`` must be positive.
+    b. The selected installment must not already be fully settled
+       (``paid_amount >= amount + interest_charged``).
+    c. ``amount`` may not exceed the sale's outstanding balance, and the sale
+       must not be cancelled.
+    d. Allocation: the money goes to the SELECTED installment first, then to
+       every other unsettled installment in number order (earlier ones
+       included), so no part of a payment is ever left unapplied (B-17).
+    e. One-time late interest: if the selected installment is still short of
+       its principal after this payment and it has never been charged
+       interest before, charge ``shortfall × rate%`` once (B-16).
+    f. One ``Payment`` row is written for the whole amount.
+    g. ``sale.remaining_cost`` -= amount, += interest. When it reaches 0 the
+       sale becomes ``CLOSED`` (B-21).
+
+    The sale and its installments are locked for the duration so concurrent
+    payments cannot both pass the balance check (B-10).
     """
-    from decimal import Decimal
-
     amount = Decimal(amount)
     if amount <= 0:
         raise ValueError('Payment amount must be positive.')
-    if installment.is_paid:
-        raise ValueError('Installment already fully paid.')
 
-    # (c) Reject overpayment beyond the whole sale
-    sale = installment.sale
-    if hasattr(sale.remaining_cost, 'resolve_expression'):
-        # An earlier payment on this same in-memory Sale instance left an
-        # F() expression behind; re-read the stored value before comparing.
-        sale.refresh_from_db(fields=['remaining_cost'])
+    sale = Sale.objects.select_for_update().get(pk=installment.sale_id)
+    if sale.status == Sale.CANCELLED:
+        raise ValueError('This sale is cancelled; payments cannot be recorded.')
+
+    all_installs = list(
+        Installment.objects.select_for_update()
+        .filter(sale=sale).order_by('number')
+    )
+    selected = next((i for i in all_installs if i.pk == installment.pk), None)
+    if selected is None:
+        raise ValueError('Installment not found on this sale.')
+    if selected.is_paid or selected.paid_amount >= selected.amount + selected.interest_charged:
+        raise ValueError('Installment already fully paid.')
     if amount > sale.remaining_cost:
         raise ValueError('Payment exceeds balance due.')
 
-    # (d) Roll-forward: apply payment to installments starting at the selected one
+    today = timezone.localdate()
     remaining = amount
-    selected_number = installment.number
-
-    # Get all installments for this sale ordered by number
-    all_installs = list(
-        installment.sale.installments.order_by('number')
-    )
-
-    interest = Decimal('0.00')  # track interest for step (g)
-
-    for inst in all_installs:
-        # Skip installments whose due <= 0
-        due = max(0, inst.amount + inst.interest_charged - inst.paid_amount)
-        if due <= 0:
-            continue
-
-        # START at the selected installment only
-        if inst.number < selected_number:
-            continue
-
-        take = min(due, remaining)
-        if take <= 0:
-            break
-
-        inst.paid_amount += take
-        remaining -= take
-
-        if inst.paid_amount >= inst.amount + inst.interest_charged:
-            inst.is_paid = True
-            inst.paid_date = timezone.localdate()
-
-        inst.save(update_fields=['paid_amount', 'is_paid', 'paid_date'])
-
+    order = [selected] + [i for i in all_installs if i.pk != selected.pk]
+    for inst in order:
         if remaining <= 0:
             break
+        due = inst.amount + inst.interest_charged - inst.paid_amount
+        if due <= 0:
+            continue
+        take = min(due, remaining)
+        inst.paid_amount += take
+        remaining -= take
+        if inst.paid_amount >= inst.amount + inst.interest_charged:
+            inst.is_paid = True
+            inst.paid_date = today
+        inst.save(update_fields=['paid_amount', 'is_paid', 'paid_date'])
 
-    # (e) One-time interest ONLY on the SELECTED installment,
-    #     only if still short of principal AFTER this payment
-    selected_inst = None
-    for inst in all_installs:
-        if inst.number == selected_number:
-            selected_inst = inst
-            break
+    interest = Decimal('0.00')
+    shortfall = selected.amount - selected.paid_amount
+    rate = Decimal(business.installment_interest_rate or 0)
+    if shortfall > 0 and rate > 0 and selected.interest_charged == 0:
+        interest = (shortfall * rate / Decimal(100)).quantize(Decimal('0.01'))
+        selected.interest_charged += interest
+        selected.is_paid = False
+        selected.paid_date = None
+        selected.save(update_fields=['interest_charged', 'is_paid', 'paid_date'])
 
-    if selected_inst is not None:
-        shortfall = max(0, selected_inst.amount - selected_inst.paid_amount)
-        if shortfall > 0 and business.installment_interest_rate > 0:
-            interest = (shortfall * Decimal(business.installment_interest_rate) / Decimal(
-                100)).quantize(Decimal('0.01'))
-            selected_inst.interest_charged += interest
-            selected_inst.save(
-                update_fields=['interest_charged', 'is_paid', 'paid_date']
-            )
-
-    # (f) Create ONE Payment row
     Payment.objects.create(
-        business=business, sale=installment.sale, installment=selected_inst
-        if selected_inst is not None else installment,
+        business=business, sale=sale, installment=selected,
         amount=amount, method=method, cash_account=cash_account,
         received_by=received_by,
     )
 
-    # (g) Update sale.remaining_cost: payment reduces, interest raises
-    sale = installment.sale
-    sale.remaining_cost = F('remaining_cost') - amount + interest
-    sale.save(update_fields=['remaining_cost'])
-    # Keep the in-memory value concrete: without this, the instance would
-    # still hold the raw F() expression and any follow-up payment (or caller
-    # assertion) reading it would see a CombinedExpression, not a number.
-    sale.refresh_from_db(fields=['remaining_cost'])
+    sale.remaining_cost = (sale.remaining_cost - amount + interest).quantize(Decimal('0.01'))
+    update_fields = ['remaining_cost']
+    if sale.remaining_cost <= 0:
+        sale.remaining_cost = Decimal('0.00')
+        sale.status = Sale.CLOSED
+        update_fields.append('status')
+    sale.save(update_fields=update_fields)
 
-    return selected_inst if selected_inst is not None else installment
+    # Keep the caller's in-memory objects in sync with the database.
+    installment.sale.remaining_cost = sale.remaining_cost
+    installment.sale.status = sale.status
+    return selected
 
 
 # ── Purchase receipts (spec 5.4) ────────────────────────────────────────────
@@ -407,6 +420,8 @@ def record_purchase_receipt(*, business, branch, purchase, received_by=None,
     stock lots, then updates the purchase status.
     """
     quantities = quantities or {}
+    # Serialize concurrent receipts of the same order (B-10).
+    Purchase.objects.select_for_update().filter(pk=purchase.pk).first()
     outstanding = []
     for pi in purchase.items.all():
         remaining = pi.quantity - pi.received_quantity
@@ -419,12 +434,10 @@ def record_purchase_receipt(*, business, branch, purchase, received_by=None,
     if not outstanding:
         return purchase, None
 
-    receipt = PurchaseReceipt.objects.create(
-        business=business, purchase=purchase, received_by=received_by,
-        receipt_no=next_sequence_number(
-            business, 'RCP', PurchaseReceipt, 'receipt_no'
-        ),
-        note=note,
+    receipt = _create_numbered(
+        PurchaseReceipt, 'receipt_no',
+        lambda: next_sequence_number(business, 'RCP', PurchaseReceipt, 'receipt_no'),
+        dict(business=business, purchase=purchase, received_by=received_by, note=note),
     )
 
     for pi, qty in outstanding:

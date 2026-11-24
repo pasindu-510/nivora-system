@@ -18,5 +18,11 @@ class LoginRequestSerializer(serializers.Serializer):
                 'Invalid credentials or inactive account.',
                 code='authentication',
             )
+        business = getattr(user, 'business', None)
+        if business is not None and not business.is_active:
+            raise serializers.ValidationError(
+                'This business account is deactivated. Contact the platform owner.',
+                code='authentication',
+            )
         attrs['user'] = user
         return attrs

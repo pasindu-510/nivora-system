@@ -1,6 +1,7 @@
 """Bookkeeping endpoints: cash accounts, expenses, capital (spec 6.7-6.8)."""
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -99,6 +100,13 @@ class SupplierPaymentViewSet(TenantModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['supplier', 'purchase', 'cash_account', 'payment_date']
     ordering_fields = ['payment_date', 'amount']
+
+    def perform_create(self, serializer):
+        """Record who paid (server-set; never taken from the payload)."""
+        tenant = self.get_tenant()
+        if tenant is None:
+            raise PermissionDenied('No business scope for this request.')
+        serializer.save(business=tenant, paid_by=self.request.user)
 
 
 class CapitalEntryViewSet(TenantModelViewSet):

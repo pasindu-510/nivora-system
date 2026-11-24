@@ -95,6 +95,7 @@ class SalesReportView(APIView):
             period = r['period']
             cogs = cogs_by_period.get(period, Decimal(0)) or Decimal(0)
             total = r['total'] or Decimal(0)
+            net_sales = (r['subtotal'] or Decimal(0)) - (r['discount'] or Decimal(0))
             result.append(
                 OrderedDict(
                     date=period.date() if hasattr(period, 'date') else period,
@@ -103,7 +104,8 @@ class SalesReportView(APIView):
                     discount=r['discount'],
                     tax=r['tax'],
                     total=total,
-                    profit=round(total - cogs, 2),
+                    # Profit = net sales (after discount, before tax) - COGS.
+                    profit=round(net_sales - cogs, 2),
                 )
             )
         return Response(result)
@@ -129,32 +131,60 @@ class ProfitReportView(APIView):
         to_date = request.query_params.get('to')
 
         sales_qs = _queryset_period(
-            Sale.objects.filter(business=business),
+            Sale.objects.filter(
+                business=business, status__in=[Sale.OPEN, Sale.CLOSED]
+            ),
             from_date, to_date,
         )
-        gross_profit_components = SaleItem.objects.filter(sale__in=sales_qs).aggregate(
-            revenue=Sum(F('unit_price') * F('quantity')),
-            cogs=Sum(F('fifo_cost') * F('quantity')),
-        )
-        revenue = gross_profit_components['revenue'] or Decimal(0)
-        cogs = gross_profit_components['cogs'] or Decimal(0)
-        gross_profit = round(revenue - cogs, 2)
+        totals = _sales_totals(sales_qs)
 
-        expenses = _queryset_period(
-            Expense.objects.filter(business=business),
-            from_date, to_date,
-        )
+        expenses = Expense.objects.filter(business=business)
+        if from_date:
+            expenses = expenses.filter(expense_date__gte=from_date)
+        if to_date:
+            expenses = expenses.filter(expense_date__lte=to_date)
         expense_total = expenses.aggregate(total=Sum('amount'))['total'] or Decimal(0)
 
+        gross_profit = totals['revenue'] - totals['cogs']
         return Response(
             OrderedDict(
-                revenue=round(revenue, 2),
-                cogs=round(cogs, 2),
-                gross_profit=gross_profit,
-                expenses=expense_total,
-                net_profit=round(gross_profit - Decimal(expense_total), 2),
+                gross_sales=round(totals['gross_sales'], 2),
+                discounts=round(totals['discounts'], 2),
+                revenue=round(totals['revenue'], 2),
+                cogs=round(totals['cogs'], 2),
+                gross_profit=round(gross_profit, 2),
+                interest_income=round(totals['interest'], 2),
+                expenses=round(expense_total, 2),
+                net_profit=round(gross_profit + totals['interest'] - expense_total, 2),
             )
         )
+
+
+def _sales_totals(sales_qs):
+    """Revenue figures for a set of (non-cancelled) sales.
+
+    revenue  = Σ subtotal − Σ invoice discount   (tax excluded: it is owed to
+               the tax authority, not income)
+    cogs     = Σ fifo_cost × quantity of the sale lines
+    interest = Σ late interest charged on the sales' installments
+    (B-13: the old report counted cancelled sales and ignored discounts.)
+    """
+    agg = sales_qs.aggregate(gross=Sum('subtotal'), discounts=Sum('discount_amount'))
+    gross = agg['gross'] or Decimal(0)
+    discounts = agg['discounts'] or Decimal(0)
+    cogs = SaleItem.objects.filter(sale__in=sales_qs).aggregate(
+        total=Sum(F('fifo_cost') * F('quantity'))
+    )['total'] or Decimal(0)
+    interest = Installment.objects.filter(sale__in=sales_qs).aggregate(
+        total=Sum('interest_charged')
+    )['total'] or Decimal(0)
+    return {
+        'gross_sales': gross,
+        'discounts': discounts,
+        'revenue': gross - discounts,
+        'cogs': cogs,
+        'interest': interest,
+    }
 
 
 class StockReportView(APIView):
@@ -180,6 +210,14 @@ class StockReportView(APIView):
         )
 
 
+def received_value_of(purchase):
+    """Σ received_quantity × unit_cost over a purchase's lines (B-14)."""
+    return sum(
+        (Decimal(i.received_quantity) * i.unit_cost for i in purchase.items.all()),
+        Decimal(0),
+    )
+
+
 def _supplier_payables(business, as_of=None):
     """Value received from suppliers less payments made to them.
 
@@ -194,14 +232,7 @@ def _supplier_payables(business, as_of=None):
     for purchase in purchases:
         if as_of is not None and purchase.created_at.date() > as_of:
             continue
-        ordered_qty = sum(i.quantity for i in purchase.items.all())
-        received_qty = sum(i.received_quantity for i in purchase.items.all())
-        if not ordered_qty or not received_qty:
-            continue
-        line_total = sum((i.total for i in purchase.items.all()), Decimal(0))
-        received_value += (
-            line_total * Decimal(received_qty) / Decimal(ordered_qty)
-        )
+        received_value += received_value_of(purchase)
 
     payments = SupplierPayment.objects.filter(business=business)
     if as_of is not None:
@@ -272,12 +303,9 @@ class BalanceSheetReportView(APIView):
             status__in=[Sale.OPEN, Sale.CLOSED],
             created_at__date__lte=as_of,
         )
-        components = SaleItem.objects.filter(sale__in=sales_qs).aggregate(
-            revenue=Sum(F('unit_price') * F('quantity')),
-            cogs=Sum(F('fifo_cost') * F('quantity')),
-        )
-        revenue = components['revenue'] or Decimal(0)
-        cogs = components['cogs'] or Decimal(0)
+        totals = _sales_totals(sales_qs)
+        revenue = totals['revenue'] + totals['interest']
+        cogs = totals['cogs']
         expenses = (
             Expense.objects.filter(
                 business=business, expense_date__lte=as_of
@@ -355,12 +383,13 @@ class CashFlowReportView(APIView):
             sale__business=business,
             due_date__gte=start,
             due_date__lt=end,
-        ).select_related('sale'):
-            if inst.is_paid and inst.paid_amount >= inst.amount:
+        ).exclude(sale__status=Sale.CANCELLED).select_related('sale'):
+            outstanding = inst.amount + inst.interest_charged - inst.paid_amount
+            if outstanding <= 0:
                 continue
             bucket = bucket_for(inst.due_date)
             if bucket is not None:
-                bucket['inflows'] += inst.amount - inst.paid_amount
+                bucket['inflows'] += outstanding
 
         # Outflows: project each active recurring template forward.
         for rec in RecurringExpense.objects.filter(
@@ -591,6 +620,7 @@ class DashboardSummaryView(APIView):
                 is_paid=False,
                 due_date__lte=week_later,
             )
+            .exclude(sale__status=Sale.CANCELLED)
             .select_related('sale', 'sale__customer')
             .order_by('due_date')
         )
@@ -602,7 +632,7 @@ class DashboardSummaryView(APIView):
                 id=inst.id,
                 customer_name=inst.sale.customer.name if inst.sale.customer else inst.sale.invoice_no,
                 invoice_no=inst.sale.invoice_no,
-                due_amount=round(inst.amount - inst.paid_amount, 2),
+                due_amount=round(inst.amount + inst.interest_charged - inst.paid_amount, 2),
                 due_date=inst.due_date,
             )
             for inst in due_installments_qs[:8]
@@ -698,6 +728,7 @@ class InstallmentDueView(APIView):
                 sale__business=business,
                 due_date__lte=window_end,
             )
+            .exclude(sale__status=Sale.CANCELLED)
             .select_related('sale', 'sale__customer')
             .order_by('due_date', 'number')
         )
