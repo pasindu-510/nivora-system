@@ -309,7 +309,14 @@ class CashAccountSerializer(TenantModelSerializer):
         ]
 
     def get_balance(self, obj):
-        return services.account_balances(self.context['request'].user.business).get(obj.id, 0)
+        # account_balances() computes every account of the business at once;
+        # cache it in the (per-request) context so a list of N accounts runs
+        # those queries once instead of N times (blueprint B-22).
+        balances = self.context.get('_account_balances')
+        if balances is None:
+            balances = services.account_balances(self.context['request'].user.business)
+            self.context['_account_balances'] = balances
+        return balances.get(obj.id, 0)
 
 
 class ExpenseCategorySerializer(TenantModelSerializer):

@@ -13,7 +13,9 @@ import { API_BASE_URL } from '../api/client.js';
  * 2. Heartbeat fetch to `${API_BASE_URL}/health/` with a short timeout — the
  *    source of truth: only a 200 from the actual host means ONLINE.
  * 3. A small state machine (`checking | online | offline`) driven by boot
- *    probe + a steady 5s poll + the browser events above. `checkNow()`
+ *    probe + a steady 30s poll (paused while the tab is hidden) + the browser
+ *    events above. A single slow/failed probe does not flip to offline — it
+ *    takes two failures in a row (shared hosting can be slow; blueprint B-25). `checkNow()`
  *    re-probes immediately (used on `online` events and manual retry).
  *
  * The probe deliberately uses raw `fetch` — never the axios `api` instance —
@@ -24,10 +26,11 @@ import { API_BASE_URL } from '../api/client.js';
  * @returns {{ status: 'checking'|'online'|'offline', isOnline: boolean,
  *   isOffline: boolean, lastCheckedAt: number|null, checkNow: () => Promise<void> }}
  */
-export function useConnectionState({ intervalMs = 5000, timeoutMs = 1500 } = {}) {
+export function useConnectionState({ intervalMs = 30000, timeoutMs = 8000, failuresBeforeOffline = 2 } = {}) {
   const [status, setStatus] = useState('checking');
   const [lastCheckedAt, setLastCheckedAt] = useState(null);
   const probingRef = useRef(false);
+  const failuresRef = useRef(0);
 
   const probe = useCallback(async () => {
     if (probingRef.current) return;
@@ -47,19 +50,33 @@ export function useConnectionState({ intervalMs = 5000, timeoutMs = 1500 } = {})
         signal: AbortSignal.timeout(timeoutMs),
         cache: 'no-store',
       });
-      setStatus(response.ok ? 'online' : 'offline');
+      if (!response.ok) throw new Error(`health ${response.status}`);
+      failuresRef.current = 0;
+      setStatus('online');
     } catch {
-      setStatus('offline');
+      failuresRef.current += 1;
+      // Before the first success, one failure is enough to leave `checking`.
+      setStatus((current) =>
+        current === 'checking' || failuresRef.current >= failuresBeforeOffline ? 'offline' : current,
+      );
     } finally {
       probingRef.current = false;
       setLastCheckedAt(Date.now());
     }
-  }, [timeoutMs]);
+  }, [timeoutMs, failuresBeforeOffline]);
 
   useEffect(() => {
     // Boot check, then Layer 3 — steady-state heartbeat.
     probe();
-    const interval = setInterval(probe, intervalMs);
+    // Hidden tabs skip the heartbeat so many open tabs don't load the host.
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      probe();
+    }, intervalMs);
+    const handleVisibility = () => {
+      if (!document.hidden) probe();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
 
     // Browser events give instant transitions; on reconnect we re-probe
     // immediately instead of waiting for the next interval tick.
@@ -67,6 +84,7 @@ export function useConnectionState({ intervalMs = 5000, timeoutMs = 1500 } = {})
       probe();
     };
     const handleOffline = () => {
+      failuresRef.current = failuresBeforeOffline;
       setStatus('offline');
       setLastCheckedAt(Date.now());
     };
@@ -75,10 +93,11 @@ export function useConnectionState({ intervalMs = 5000, timeoutMs = 1500 } = {})
 
     return () => {
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [probe, intervalMs]);
+  }, [probe, intervalMs, failuresBeforeOffline]);
 
   return {
     status,

@@ -14,7 +14,7 @@ import {
  */
 export const routeAccess = {
   '/login': null, // public
-  '/dashboard': DASHBOARD_VIEWERS, // super_admin, business_admin, manager (not cashier)
+  '/dashboard': DASHBOARD_VIEWERS, // business_admin, manager (not cashier, not super_admin)
 
   '/sales/new': STAFF,
   '/sales': STAFF,

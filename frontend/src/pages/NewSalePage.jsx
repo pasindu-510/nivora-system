@@ -56,6 +56,10 @@ export default function NewSalePage() {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [branchId, setBranchId] = useState('');
   const [customerId, setCustomerId] = useState('');
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [debouncedCustomerSearch, setDebouncedCustomerSearch] = useState('');
+  // Keep the chosen customer visible even when a new search no longer matches it.
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [cart, setCart] = useState([]);
   const [discountType, setDiscountType] = useState(DISCOUNT_PERCENT);
   const [discountValue, setDiscountValue] = useState('0');
@@ -76,6 +80,11 @@ export default function NewSalePage() {
     return () => clearTimeout(timer);
   }, [search]);
 
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedCustomerSearch(customerSearch.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [customerSearch]);
+
   // ── Queries ───────────────────────────────────────────────────────────────
   const branchesQuery = useQuery({
     queryKey: qk.branches.list({ is_active: true }),
@@ -83,8 +92,11 @@ export default function NewSalePage() {
   });
 
   const customersQuery = useQuery({
-    queryKey: qk.customers.list({}),
-    queryFn: async () => (await customersApi.list({})).data,
+    // Server-side search (name / phone / NIC) so shops with many customers
+    // can find anyone, not just the first page.
+    queryKey: qk.customers.list({ q: debouncedCustomerSearch, page_size: 100, ordering: 'name' }),
+    queryFn: async () =>
+      (await customersApi.list({ q: debouncedCustomerSearch, page_size: 100, ordering: 'name' })).data,
   });
 
   const cashAccountsQuery = useQuery({
@@ -113,10 +125,14 @@ export default function NewSalePage() {
     return rows.filter((row) => row.is_active);
   }, [branchesQuery.data]);
 
-const customers = useMemo(() => {
+  const customers = useMemo(() => {
     const rows = (customersQuery.data && customersQuery.data.results) || [];
+    if (selectedCustomer && !rows.some((row) => row.id === selectedCustomer.id)) {
+      return [selectedCustomer, ...rows];
+    }
     return rows;
-}, [customersQuery.data]);
+  }, [customersQuery.data, selectedCustomer]);
+  const customerTotal = (customersQuery.data && customersQuery.data.count) || 0;
 
   const cashAccounts = useMemo(() => {
     const rows = (cashAccountsQuery.data && cashAccountsQuery.data.results) || [];
@@ -319,25 +335,47 @@ const customers = useMemo(() => {
               </div>
 
 <div>
-                 <label className="label" htmlFor="sale-customer">
-                   Customer <span className="font-normal text-slate-400">(optional)</span>
-                 </label>
-                 <select
-                   id="sale-customer"
-                   className="input"
-                   value={customerId}
-                   onChange={(event) => setCustomerId(event.target.value)}
-                 >
-                   <option value="">Walk-in customer</option>
-                   {customers.map((row) => (
-                     <option key={row.id} value={row.id}>
-                       {row.name}
-                       {row.phone ? ` — ${row.phone}` : ''}
-                       {row.nic ? ` NIC: ${row.nic}` : ''}
-                     </option>
-                   ))}
-                 </select>
-               </div>
+                <label className="label" htmlFor="sale-customer-search">
+                  Customer <span className="font-normal text-slate-400">(optional)</span>
+                </label>
+                <input
+                  id="sale-customer-search"
+                  type="search"
+                  className="input mb-2"
+                  placeholder="Search customer by name, phone or NIC"
+                  value={customerSearch}
+                  onChange={(event) => setCustomerSearch(event.target.value)}
+                />
+                <select
+                  id="sale-customer"
+                  className="input"
+                  aria-label="Customer"
+                  value={customerId}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setCustomerId(value);
+                    setSelectedCustomer(customers.find((row) => String(row.id) === value) || null);
+                  }}
+                >
+                  <option value="">Walk-in customer</option>
+                  {customers.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {row.name}
+                      {row.phone ? ` — ${row.phone}` : ''}
+                      {row.nic ? ` NIC: ${row.nic}` : ''}
+                    </option>
+                  ))}
+                </select>
+                {customersQuery.isFetching ? (
+                  <p className="mt-1 text-xs text-slate-400">Searching…</p>
+                ) : customerTotal > customers.length ? (
+                  <p className="mt-1 text-xs text-slate-500">
+                    Showing {customers.length} of {customerTotal} customers — type to narrow the list.
+                  </p>
+                ) : debouncedCustomerSearch && customerTotal === 0 ? (
+                  <p className="mt-1 text-xs text-slate-500">No customer matches “{debouncedCustomerSearch}”.</p>
+                ) : null}
+              </div>
             </div>
           </section>
 

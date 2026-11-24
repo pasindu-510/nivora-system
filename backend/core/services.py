@@ -34,6 +34,7 @@ from .models import (
     SeasonalDiscount,
     StockLot,
     StockMovement,
+    SupplierPayment,
 )
 
 
@@ -547,25 +548,28 @@ def account_balances(business):
 
     balance = opening + sale payments in − expenses out − supplier payments out.
     """
-    accounts = CashAccount.objects.filter(business=business, is_active=True)
+    accounts = list(CashAccount.objects.filter(business=business, is_active=True))
+    ids = [acct.id for acct in accounts]
+
+    def _totals(queryset):
+        # One grouped query per source instead of one per account (B-22).
+        rows = (
+            queryset.filter(cash_account_id__in=ids)
+            .values('cash_account_id')
+            .annotate(total=Sum('amount'))
+        )
+        return {row['cash_account_id']: row['total'] or Decimal(0) for row in rows}
+
+    inflow = _totals(Payment.objects.filter(business=business))
+    outflow = _totals(Expense.objects.filter(business=business))
+    supplier_out = _totals(SupplierPayment.objects.all())
+
     balance_map = {}
     for acct in accounts:
-        opening = Decimal(acct.opening_balance)
-        inflow = (
-            Payment.objects.filter(business=business, cash_account=acct)
-            .aggregate(total=Sum('amount'))['total']
-            or Decimal(0)
-        )
-        outflow = (
-            Expense.objects.filter(business=business, cash_account=acct)
-            .aggregate(total=Sum('amount'))['total']
-            or Decimal(0)
-        )
-        supplier_out = (
-            acct.supplier_payments.aggregate(total=Sum('amount'))['total']
-            or Decimal(0)
-        )
         balance_map[acct.id] = (
-            opening + inflow - outflow - supplier_out
+            Decimal(acct.opening_balance)
+            + inflow.get(acct.id, Decimal(0))
+            - outflow.get(acct.id, Decimal(0))
+            - supplier_out.get(acct.id, Decimal(0))
         ).quantize(Decimal('0.01'))
     return balance_map

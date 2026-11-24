@@ -31,9 +31,10 @@ export const BUSINESS_ADMINS = Object.freeze([ROLES.BUSINESS_ADMIN]);
 /** Platform-level role: tenant businesses + all users (routes/menu under /admin). */
 export const SUPER_ADMINS = Object.freeze([ROLES.SUPER_ADMIN]);
 
-/** Roles that may open the dashboard (cashier gets a POS-first workspace). */
+/** Roles that may open the dashboard (cashier gets a POS-first workspace).
+ *  Super admin is excluded: the dashboard API is business-scoped and returns
+ *  403 for a platform account (blueprint B-23). */
 export const DASHBOARD_VIEWERS = Object.freeze([
-  ROLES.SUPER_ADMIN,
   ROLES.BUSINESS_ADMIN,
   ROLES.MANAGER,
 ]);

@@ -3360,3 +3360,31 @@ class MoneyAndStockFixTests(APITestCase):
         self.client.force_authenticate(self.manager)
         resp = self.client.get(reverse('supplier-ledger', args=[supplier.id]))
         self.assertEqual(Decimal(str(resp.data['total_billed'])), Decimal('100000.00'))
+
+
+class CashAccountListPerformanceTests(APITestCase):
+    """B-22: listing N cash accounts must not recompute all balances N times."""
+
+    def setUp(self):
+        self.biz = _make_business('Cash Co', tax_rate='0.00')
+        self.main = _make_branch(self.biz, 'Main')
+        self.admin = _make_user('cash_admin', RoleConstants.BUSINESS_ADMIN, self.biz, self.main)
+
+    def _query_count(self, accounts):
+        CashAccount.objects.filter(business=self.biz).delete()
+        for i in range(accounts):
+            CashAccount.objects.create(
+                business=self.biz, name=f'Acc {i}', type='CASH', opening_balance=Decimal('10.00'),
+            )
+        self.client.force_authenticate(self.admin)
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        with CaptureQueriesContext(connection) as ctx:
+            resp = self.client.get(reverse('cashaccount-list'))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        for row in resp.data['results']:
+            self.assertEqual(Decimal(str(row['balance'])), Decimal('10.00'))
+        return len(ctx.captured_queries)
+
+    def test_query_count_does_not_grow_with_accounts(self):
+        self.assertEqual(self._query_count(2), self._query_count(8))

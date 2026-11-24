@@ -973,9 +973,13 @@ Severity: **Critical** (security / data loss) · **High** (wrong money or stock,
 **Fixed on 2026-11-24** (with regression tests in `core/tests.py`:
 `SecurityHardeningTests`, `MoneyAndStockFixTests`, `BusinessLogoTests`):
 B-01, B-02, B-03, B-04, B-05, B-06, B-07, B-08, B-09, B-10, B-11, B-12, B-13, B-14,
-B-15, B-16, B-17, B-18, B-19, B-21. The rules in §5–§7 describe the fixed behaviour;
+B-15, B-16, B-17, B-18, B-19, B-21. Also fixed 2026-11-24 (second batch): B-20 (POS
+customer search, server-side `q`), B-22 (`account_balances` = 3 grouped queries, cached per
+request; `CashAccountListPerformanceTests`), B-23 (super admin removed from
+`DASHBOARD_VIEWERS`), B-25 (health probe: 30 s interval, 8 s timeout, paused in hidden tabs,
+2 consecutive failures before "Offline"). The rules in §5–§7 describe the fixed behaviour;
 the table below keeps the original description for history.
-**Still open:** B-20, B-22, B-23, B-24, B-25 and gaps G-01…G-07.
+**Still open:** B-24 and gaps G-01…G-07.
 
 ### Bugs
 
