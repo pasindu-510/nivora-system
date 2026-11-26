@@ -37,7 +37,7 @@ class SaleViewSet(TenantModelViewSet):
     """
 
     queryset = Sale.objects.select_related(
-        'business', 'branch', 'customer', 'created_by'
+        'business', 'branch', 'customer', 'created_by', 'guarantor_1', 'guarantor_2'
     ).prefetch_related('items', 'installments', 'payments').all()
     permission_classes = [IsCashierOrAbove]
     filter_backends = [

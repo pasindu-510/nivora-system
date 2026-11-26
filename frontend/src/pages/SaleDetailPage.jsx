@@ -503,6 +503,30 @@ export default function SaleDetailPage() {
                 <p className="text-sm font-medium">Plan</p>
                 <p className="mt-1">{sale.number_of_installments} installments</p>
               </div>
+              {Number(sale.plan_interest) > 0 ? (
+                <>
+                  <div>
+                    <p className="text-sm font-medium">
+                      Interest ({Number(sale.monthly_interest_rate)}% per month)
+                    </p>
+                    <p className="mt-1 font-bold">{formatLKR(sale.plan_interest)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">Total payable</p>
+                    <p className="mt-1 font-bold">
+                      {formatLKR(Number(sale.total_cost) + Number(sale.plan_interest))}
+                    </p>
+                  </div>
+                </>
+              ) : null}
+              {(sale.guarantors || []).map((person, index) => (
+                <div key={person.id}>
+                  <p className="text-sm font-medium">Guarantor {index + 1}</p>
+                  <p className="mt-1">
+                    {[person.name, person.phone, person.nic].filter(Boolean).join(' · ')}
+                  </p>
+                </div>
+              ))}
             </div>
             <div className="mt-2">
               <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
@@ -698,7 +722,7 @@ export default function SaleDetailPage() {
                   </p>
                   {Number(user?.business_installment_interest_rate || 0) > 0 && (
                     <p className="mt-1 text-xs text-slate-600">
-                      Paying less than the installment amount adds {Number(user.business_installment_interest_rate).toFixed(2)}% interest on the shortfall.
+                      Paying less than the installment amount adds {Number(user.business_installment_interest_rate).toFixed(2)}% delay payment charge on the unpaid part.
                     </p>
                   )}
                   {collectInstallment && Number(collectInstallment.interest_charged || 0) > 0 && (

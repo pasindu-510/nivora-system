@@ -288,6 +288,7 @@ function ItemFormFields({
           <PhotoUpload
             label="Image"
             id="item-image-upload"
+            noun="image"
             value={form.image}
             onChange={onImageChange}
             error={errors.image}

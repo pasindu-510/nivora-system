@@ -6,6 +6,9 @@ POST /api/business/logo/
   ``Business.logo`` (replacing any previous file). The response returns the
   relative storage path (``filename``) and the public URL (``url``).
 
+DELETE /api/business/logo/
+  Removes the current logo (204).
+
 GET /api/business/logo/
   Returns ``{ url, filename }`` for the current logo, or ``{ none: true }``
   when the business has no logo yet.
@@ -128,6 +131,16 @@ class BusinessLogoView(APIView):
             {'filename': stored_path, 'url': _logo_url(stored_path)},
             status=status.HTTP_201_CREATED,
         )
+
+    def delete(self, request, *args, **kwargs):
+        """Remove the current logo and its file. Safe to call when none is set."""
+        business = request.user.business
+        if business.logo:
+            old_name = business.logo.name
+            business.logo = None
+            business.save(update_fields=['logo', 'updated_at'])
+            default_storage.delete(old_name)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def get(self, request, *args, **kwargs):
         """Return the current business logo URL, if any.

@@ -71,6 +71,18 @@ class Business(models.Model):
     installment_interest_rate = models.DecimalField(
         max_digits=5, decimal_places=2, default=0
     )
+    installments_enabled = models.BooleanField(default=True)
+    # Flat interest per month, added to an installment plan when it is sold.
+    # (``installment_interest_rate`` above is the separate short-payment charge.)
+    installment_monthly_interest_rate = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0
+    )
+    # Guarantors every installment sale must name: 0, 1 or 2.
+    required_guarantors = models.PositiveSmallIntegerField(default=0)
+    # Installment sales: minimum down payment as a share of the total (0 = none).
+    min_down_payment_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0
+    )
     cashier_discount_cap = models.DecimalField(
         max_digits=5, decimal_places=2, default=20
     )
@@ -335,6 +347,17 @@ class Sale(BusinessModel):
         max_length=10, choices=FREQUENCY_CHOICES, default=MONTHLY
     )
     installment_interval_days = models.IntegerField(default=30)
+    # Rate used and interest added to the plan (not part of total_cost).
+    monthly_interest_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    plan_interest = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    guarantor_1 = models.ForeignKey(
+        Customer, null=True, blank=True,
+        on_delete=models.PROTECT, related_name='guaranteed_first',
+    )
+    guarantor_2 = models.ForeignKey(
+        Customer, null=True, blank=True,
+        on_delete=models.PROTECT, related_name='guaranteed_second',
+    )
     created_by = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name='sales'
     )

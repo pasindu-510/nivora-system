@@ -200,6 +200,10 @@ Conventions:
 | is_active | bool | no | true | false → staff cannot log in; API returns 403 |
 | tax_rate | decimal(5,2) | no | 0 | VAT %, default for new sales |
 | installment_interest_rate | decimal(5,2) | no | 0 | one-time late-interest % (§5.4) |
+| installments_enabled | bool | no | true | false → installment sale create returns 400; existing plans stay payable |
+| installment_monthly_interest_rate | decimal(5,2) | no | 0 | flat monthly interest added to new plans (§5.4) |
+| required_guarantors | uint | no | 0 | 0, 1 or 2 per installment sale |
+| min_down_payment_percent | decimal(5,2) | no | 0 | 0–99; installment sales need `down_payment >= ceil(total × % / 100 to the next 100)` (§5.3) |
 | cashier_discount_cap | decimal(5,2) | no | 20 | max spot discount % for cashiers (enforced on sale create) |
 | max_installments | uint | yes | null | null = unlimited; enforced on sale create |
 | max_users | uint | yes | null | null = unlimited; ≥1 if set |
@@ -425,6 +429,10 @@ Input: branch, optional customer, lines `[{item, quantity>=1}]` (non-empty),
 `installment_interval_days` (default 30), optional `cash_account`, optional
 `sale_date` and per-line `unit_price`.
 
+Minimum down payment (installment sales): `min = ceil(total_cost × percent / 10000) × 100`.
+400 if `down_payment < min`, or if `min >= total_cost` (order too small for installments).
+Applies to back-dated sales too, using the current percentage.
+
 Back-dated sale (`sale_date` before today, manager+, limit §5.14): FIFO uses only lots
 received on or before that date; seasonal discounts are those of that date; a given
 `unit_price` replaces price and discount (rejected on a sale dated today); the first
@@ -495,6 +503,20 @@ create_installments(remaining, count, first_due, interval_days):
                               due_date = first_due + interval_days * i
 ```
 Example: 10 000.00 over 3 → 3333.34, 3333.33, 3333.33; due today+30, +60, +90.
+
+**Monthly interest** (`installment_monthly_interest_rate > 0`):
+`balance = total_cost − down_payment`; `months = count` for MONTHLY, else
+`count × interval_days / 30`; every installment =
+`ceil(balance × (1 + rate% × months) / count / 50) × 50`.
+`Sale.monthly_interest_rate` and `Sale.plan_interest = Σ installments − balance` are
+stored; `remaining_cost` starts at Σ installments; `total_cost` stays the goods total
+(no VAT on interest). Reports count `plan_interest` as interest income on the sale date.
+
+**Customer and guarantors:** an installment sale requires `customer` and exactly
+`required_guarantors` ids in `guarantors` (own business, distinct, not the buyer),
+stored as `Sale.guarantor_1/2` (protected from deletion). A customer with an OPEN sale
+cannot be deleted. `installment_interest_rate` is the **Delay payment rate** in the SPA
+(the one-time short-payment charge of §5.5).
 
 ### 5.5 Paying an installment
 
@@ -668,7 +690,8 @@ except health, login, refresh. Trailing slashes are required. "CRUD" =
 | GET | `/auth/me/` | — | `<User>` |
 
 `<User>` = `{id, username, full_name, phone, role, business, branch, is_active, email,
-business_tax_rate:"15.00", business_installment_interest_rate:"0.00", business_backdate_limit_days:0, business_item_images_enabled:true,
+business_tax_rate:"15.00", business_installment_interest_rate:"0.00", business_backdate_limit_days:0, business_item_images_enabled:true, business_min_down_payment_percent:"0.00", business_installments_enabled:true,
+business_installment_monthly_interest_rate:"0.00", business_required_guarantors:0,
 business_name, business_logo:"/media/business_logos/x.png"|null}`
 (`business_tax_rate` etc. are `"0"`/null when user has no business).
 
@@ -782,7 +805,8 @@ branch_address, branch_phone, discount_label ("10.00%" | "LKR 500.00" | "")
 → 201 sale detail.
 
 `POST /sales/{id}/pay_installment/` `{installment, amount, method?, cash_account?, payment_date?}` → 200 sale detail.
-`POST /sales/` also takes `sale_date?` and `lines[].unit_price?` (§5.3).
+`POST /sales/` also takes `sale_date?`, `lines[].unit_price?` (§5.3) and `guarantors?` (§5.4).
+Sale detail adds `monthly_interest_rate`, `plan_interest`, `guarantors[{id,name,phone,nic,address}]`.
 `POST /sales/{id}/cancel/` → 200 sale detail (manager+).
 `PUT/PATCH/DELETE /sales/{id}/` return 405 — sales are immutable.
 

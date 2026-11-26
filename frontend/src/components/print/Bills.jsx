@@ -177,7 +177,7 @@ function weekdayName(dateValue) {
 /**
  * Payment terms box (installment invoices only) — replaces the old schedule
  * table. Mirrors the approved copy: due-day/month phrasing, commencement and
- * final due dates, and a late-payment interest note. Weekly plans reword the
+ * final due dates. Weekly plans reword the
  * "28th of every month" phrase to "every {weekday}".
  */
 function PaymentTermsBox({ sale }) {
@@ -201,10 +201,6 @@ function PaymentTermsBox({ sale }) {
       ? `every ${lastWord.toLowerCase()}`
       : 'its due date'
     : `the ${lastDoM || 'due date'} of every month`;
-
-  const closingPhrase = isWeekly
-    ? 'on or before its due date'
-    : `on or before the ${lastDoM || 'due date'} of the month`;
 
   return (
     <div className="mb-4 break-inside-avoid rounded-lg border border-slate-400 bg-white px-3.5 py-3">
@@ -235,10 +231,32 @@ function PaymentTermsBox({ sale }) {
           </>
         ) : null}
       </p>
-      <p className="mt-1.5 text-[11px] leading-relaxed text-slate-700">
-        Interest will be added to any installment not settled by its due date. Please ensure each
-        installment is paid {closingPhrase} to avoid additional charges.
-      </p>
+    </div>
+  );
+}
+
+/** Guarantor details with signature lines (installment invoices). */
+function GuarantorBox({ sale }) {
+  const guarantors = sale.guarantors || [];
+  if (!guarantors.length) return null;
+  const people = [
+    { role: 'Customer', name: sale.customer_name },
+    ...guarantors.map((g, i) => ({ ...g, role: `Guarantor ${i + 1}` })),
+  ];
+  return (
+    <div className="mb-4 grid grid-cols-3 gap-4 break-inside-avoid text-[10px] text-slate-700">
+      {people.map((person) => (
+        <div key={person.role}>
+          <p className="text-[9px] font-bold uppercase tracking-[0.08em] text-slate-500">
+            {person.role}
+          </p>
+          <p className="font-semibold text-slate-900">{person.name}</p>
+          {person.nic ? <p>NIC: {person.nic}</p> : null}
+          {person.phone ? <p>{person.phone}</p> : null}
+          {person.address ? <p>{person.address}</p> : null}
+          <p className="mt-6 border-t border-slate-400 pt-0.5 text-slate-500">Signature</p>
+        </div>
+      ))}
     </div>
   );
 }
@@ -349,6 +367,24 @@ export function SaleInvoiceBill({ sale }) {
                 {formatLKR(sale.total_cost)}
               </td>
             </tr>
+            {Number(sale.plan_interest) > 0 ? (
+              <>
+                <tr>
+                  <td className="py-1 pr-4 text-slate-600">
+                    Installment interest ({Number(sale.monthly_interest_rate)}% per month)
+                  </td>
+                  <td className="py-1 text-right font-medium tabular-nums">
+                    + {formatLKR(sale.plan_interest)}
+                  </td>
+                </tr>
+                <tr className="border-t border-slate-300">
+                  <td className="py-1 pr-4 font-bold text-slate-900">Total payable</td>
+                  <td className="py-1 text-right font-bold tabular-nums">
+                    {formatLKR(Number(sale.total_cost) + Number(sale.plan_interest))}
+                  </td>
+                </tr>
+              </>
+            ) : null}
           </tbody>
         </table>
       </div>
@@ -381,6 +417,8 @@ export function SaleInvoiceBill({ sale }) {
 
           {/* Payment terms — professional recurring-payment copy */}
           <PaymentTermsBox sale={sale} />
+
+          <GuarantorBox sale={sale} />
         </>
       ) : (
         <div className="mb-4 break-inside-avoid rounded-lg border border-slate-400 bg-white px-3 py-2.5 text-[11px]">

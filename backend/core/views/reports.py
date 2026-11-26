@@ -169,7 +169,10 @@ def _sales_totals(sales_qs):
     interest = Σ late interest charged on the sales' installments
     (B-13: the old report counted cancelled sales and ignored discounts.)
     """
-    agg = sales_qs.aggregate(gross=Sum('subtotal'), discounts=Sum('discount_amount'))
+    agg = sales_qs.aggregate(
+        gross=Sum('subtotal'), discounts=Sum('discount_amount'),
+        plan=Sum('plan_interest'),
+    )
     gross = agg['gross'] or Decimal(0)
     discounts = agg['discounts'] or Decimal(0)
     cogs = SaleItem.objects.filter(sale__in=sales_qs).aggregate(
@@ -183,7 +186,8 @@ def _sales_totals(sales_qs):
         'discounts': discounts,
         'revenue': gross - discounts,
         'cogs': cogs,
-        'interest': interest,
+        # Plan interest counts when the sale is made, like the sale itself.
+        'interest': interest + (agg['plan'] or Decimal(0)),
     }
 
 

@@ -9,31 +9,7 @@ import { useApiMutation } from '../hooks/useApiMutation.js';
 import PageHeader from '../components/PageHeader.jsx';
 import FormField from '../components/FormField.jsx';
 import PhotoUpload from '../components/PhotoUpload.jsx';
-
-function validateTaxRate(values) {
-  const errors = {};
-  const raw = String(values.tax_rate ?? '').trim();
-  if (raw === '') errors.tax_rate = 'Tax rate is required.';
-  else {
-    const rate = Number(raw);
-    // Number('') is 0 — empty is already handled above.
-    if (!Number.isFinite(rate)) errors.tax_rate = 'Tax rate must be a number.';
-    else if (rate < 0 || rate > 100) errors.tax_rate = 'Tax rate must be between 0 and 100.';
-  }
-  return errors;
-}
-
-function validateInstallmentInterestRate(values) {
-  const errors = {};
-  const raw = String(values.installment_interest_rate ?? '').trim();
-  if (raw === '') errors.installment_interest_rate = 'Installment interest rate is required.';
-  else {
-    const rate = Number(raw);
-    if (!Number.isFinite(rate)) errors.installment_interest_rate = 'Installment interest rate must be a number.';
-    else if (rate < 0 || rate > 100) errors.installment_interest_rate = 'Installment interest rate must be between 0 and 100.';
-  }
-  return errors;
-}
+import Modal from '../components/Modal.jsx';
 
 /**
  * DRF field errors come back as `{ field: [msg, ...] }` — split them so each
@@ -54,305 +30,286 @@ function parseServerError(error) {
   return { fields, banner };
 }
 
-/** Tax-rate editor — same contract as the /settings/finance section. */
-function TaxRateCard() {
-  const [draft, setDraft] = useState('');
-  const [dirty, setDirty] = useState(false);
-  const [errors, setErrors] = useState({});
-  const [banner, setBanner] = useState(null);
+const SALES_FIELDS = [
+  {
+    name: 'tax_rate',
+    label: 'Tax rate',
+    type: 'percent',
+    max: 100,
+    hint: 'The default VAT rate applied to new sales and shown on the VAT report.',
+  },
+];
 
-  const settingsQuery = useQuery({
-    queryKey: qk.finance.settings,
-    queryFn: async () => (await financeSettingsApi.get()).data,
-  });
+const INSTALLMENT_FIELDS = [
+  {
+    name: 'installments_enabled',
+    label: 'Installment sales',
+    type: 'toggle',
+    text: 'Allow selling on installments',
+    hint: 'Turning this off hides installments on New Sale. Existing plans can still be paid.',
+  },
+  {
+    name: 'installment_monthly_interest_rate',
+    label: 'Monthly interest rate',
+    type: 'percent',
+    max: 100,
+    hint: 'Flat interest per month on the balance. Each installment is rounded up to the next 50. 0 means none.',
+  },
+  {
+    name: 'min_down_payment_percent',
+    label: 'Minimum down payment',
+    type: 'percent',
+    max: 99,
+    hint: 'Share of the order total, rounded up to the next 100. 0 means no minimum.',
+  },
+  {
+    name: 'installment_interest_rate',
+    label: 'Delay payment rate',
+    type: 'percent',
+    max: 100,
+    hint: 'Charged once on the unpaid part when an installment is paid short.',
+  },
+  {
+    name: 'required_guarantors',
+    label: 'Guarantors required',
+    type: 'select',
+    options: [
+      [0, 'None'],
+      [1, 'One guarantor'],
+      [2, 'Two guarantors'],
+    ],
+    hint: 'Each installment sale must name this many guarantors.',
+  },
+];
 
-  const saveMutation = useApiMutation((data) => financeSettingsApi.update(data), {
-    // The POS prefill on /sales/new reads the rate from /api/auth/me/
-    // (UserSerializer.business_tax_rate), so both caches must refresh.
-    invalidates: [qk.finance.settings, qk.auth.me],
-  });
-
-  // `tax_rate` arrives as a string ("10.00") — keep it a string until math.
-  const serverRate = settingsQuery.data ? String(settingsQuery.data.tax_rate ?? '') : '';
-  // Show the saved rate until the user starts editing, then the draft.
-  const value = dirty ? draft : serverRate;
-
-  function handleChange(event) {
-    setDraft(event.target.value);
-    setDirty(true);
-  }
-
-  async function handleSubmit(event) {
-    event.preventDefault();
-    const clientErrors = validateTaxRate({ tax_rate: value });
-    setErrors(clientErrors);
-    setBanner(null);
-    if (Object.keys(clientErrors).length) return;
-    try {
-      const response = await saveMutation.mutateAsync({
-        tax_rate: String(value).trim(),
-      });
-      // Adopt the server's echoed value right away so the field never blinks
-      // back to the pre-save cache while the invalidation refetch is in flight.
-      const saved = response && response.data ? response.data.tax_rate : null;
-      setDraft(saved != null ? String(saved) : String(value).trim());
-    } catch (error) {
-      const parsed = parseServerError(error);
-      setErrors(parsed.fields);
-      setBanner(parsed.banner);
-    }
-  }
-
-  return (
-    <section className="card p-5">
-      <h2 className="text-lg font-bold tracking-tight text-slate-900">Tax rate</h2>
-      <p className="mt-1 text-sm text-slate-500">
-        {settingsQuery.isPending
-          ? 'Loading tax rate...'
-          : `Current rate: ${serverRate}%`}
-      </p>
-
-      {settingsQuery.isError ? (
-        <div
-          className="mt-4 flex flex-wrap items-center gap-3 rounded-control border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800"
-          role="alert"
-        >
-          <span>Could not load the tax rate — {apiErrorMessage(settingsQuery.error)}</span>
-          <button
-            type="button"
-            className="btn-secondary px-2.5 py-1 text-xs"
-            onClick={() => settingsQuery.refetch()}
-          >
-            Retry
-          </button>
-        </div>
-      ) : null}
-
-      {banner ? (
-        <div
-          className="mt-4 rounded-control border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm font-medium text-rose-700"
-          role="alert"
-        >
-          {banner}
-        </div>
-      ) : null}
-
-      <form onSubmit={handleSubmit} noValidate className="mt-4 space-y-4">
-        <FormField
-          label="Tax rate"
-          required
-          error={errors.tax_rate}
-          hint="The default VAT rate applied to new sales and shown on the VAT report."
-        >
-          <div className="relative">
-            <input
-              className="input pr-10"
-              type="number"
-              min="0"
-              max="100"
-              step="0.01"
-              name="tax_rate"
-              value={value}
-              onChange={handleChange}
-              placeholder="0.00"
-              disabled={settingsQuery.isPending || settingsQuery.isError}
-            />
-            <span
-              className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-slate-400"
-              aria-hidden="true"
-            >
-              %
-            </span>
-          </div>
-        </FormField>
-
-        <div className="flex items-center gap-3">
-          <button
-            type="submit"
-            className="btn-primary"
-            disabled={
-              saveMutation.isPending ||
-              settingsQuery.isPending ||
-              settingsQuery.isError ||
-              value === ''
-            }
-          >
-            {saveMutation.isPending ? 'Saving...' : 'Save'}
-          </button>
-        </div>
-      </form>
-    </section>
-  );
+/** Has the draft actually changed the saved value? "10" equals "10.00". */
+function differs(field, draft, saved) {
+  if (draft === undefined) return false;
+  if (field.type === 'toggle') return draft !== saved;
+  return String(draft).trim() !== '' && Number(draft) !== Number(saved);
 }
 
-/** Installment interest rate editor — mirrors TaxRateCard contract. */
-function InstallmentInterestRateCard() {
-  const [draft, setDraft] = useState('');
-  const [dirty, setDirty] = useState(false);
+/** A group of settings with one Save button, enabled only after a change. */
+function SettingsCard({ title, description, fields }) {
+  const [draft, setDraft] = useState({});
   const [errors, setErrors] = useState({});
-  const [banner, setBanner] = useState(null);
-
-  const settingsQuery = useQuery({
-    queryKey: qk.finance.settings,
-    queryFn: async () => (await financeSettingsApi.get()).data,
-  });
-
-  const saveMutation = useApiMutation((data) => financeSettingsApi.update(data), {
-    // The POS prefill on /sales/new reads the rate from /api/auth/me/
-    // (UserSerializer.business_installment_interest_rate), so both caches must refresh.
-    invalidates: [qk.finance.settings, qk.auth.me],
-  });
-
-  // `installment_interest_rate` arrives as a string ("2.00") — keep it a string until math.
-  const serverRate = settingsQuery.data ? String(settingsQuery.data.installment_interest_rate ?? '') : '';
-  // Show the saved rate until the user starts editing, then the draft.
-  const value = dirty ? draft : serverRate;
-
-  function handleChange(event) {
-    setDraft(event.target.value);
-    setDirty(true);
-  }
-
-  async function handleSubmit(event) {
-    event.preventDefault();
-    const clientErrors = validateInstallmentInterestRate({ installment_interest_rate: value });
-    setErrors(clientErrors);
-    setBanner(null);
-    if (Object.keys(clientErrors).length) return;
-    try {
-      const response = await saveMutation.mutateAsync({
-        installment_interest_rate: String(value).trim(),
-      });
-      // Adopt the server's echoed value right away so the field never blinks
-      // back to the pre-save cache while the invalidation refetch is in flight.
-      const saved = response && response.data ? response.data.installment_interest_rate : null;
-      setDraft(saved != null ? String(saved) : String(value).trim());
-    } catch (error) {
-      const parsed = parseServerError(error);
-      setErrors(parsed.fields);
-      setBanner(parsed.banner);
-    }
-  }
-
-  return (
-    <section className="card p-5">
-      <h2 className="text-lg font-bold tracking-tight text-slate-900">Installment interest rate</h2>
-      <p className="mt-1 text-sm text-slate-500">
-        {settingsQuery.isPending
-          ? 'Loading installment interest rate...'
-          : `Current rate: ${serverRate}%`}
-      </p>
-
-      {settingsQuery.isError ? (
-        <div
-          className="mt-4 flex flex-wrap items-center gap-3 rounded-control border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800"
-          role="alert"
-        >
-          <span>Could not load the installment interest rate — {apiErrorMessage(settingsQuery.error)}</span>
-          <button
-            type="button"
-            className="btn-secondary px-2.5 py-1 text-xs"
-            onClick={() => settingsQuery.refetch()}
-          >
-            Retry
-          </button>
-        </div>
-      ) : null}
-
-      {banner ? (
-        <div
-          className="mt-4 rounded-control border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm font-medium text-rose-700"
-          role="alert"
-        >
-          {banner}
-        </div>
-      ) : null}
-
-      <form onSubmit={handleSubmit} noValidate className="mt-4 space-y-4">
-        <FormField
-          label="Installment interest rate"
-          required
-          error={errors.installment_interest_rate}
-          hint="Interest (%) added to the balance when an installment is paid short. Charged once per shortfall payment."
-        >
-          <div className="relative">
-            <input
-              className="input pr-10"
-              type="number"
-              min="0"
-              max="100"
-              step="0.01"
-              name="installment_interest_rate"
-              value={value}
-              onChange={handleChange}
-              placeholder="0.00"
-              disabled={settingsQuery.isPending || settingsQuery.isError}
-            />
-            <span
-              className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-slate-400"
-              aria-hidden="true"
-            >
-              %
-            </span>
-          </div>
-        </FormField>
-
-        <div className="flex items-center gap-3">
-          <button
-            type="submit"
-            className="btn-primary"
-            disabled={
-              saveMutation.isPending ||
-              settingsQuery.isPending ||
-              settingsQuery.isError ||
-              value === ''
-            }
-          >
-            {saveMutation.isPending ? 'Saving...' : 'Save'}
-          </button>
-        </div>
-      </form>
-    </section>
-  );
-}
-
-/** Business logo upload — POST /api/business/logo/ (multipart). */
-function LogoCard() {
-  const { user } = useAuth();
-  const [logo, setLogo] = useState(null);
   const [banner, setBanner] = useState(null);
   const [success, setSuccess] = useState(false);
 
-  // me() carries the resolved media URL; it refetches via qk.auth.me
-  // invalidation after a successful upload.
+  const settingsQuery = useQuery({
+    queryKey: qk.finance.settings,
+    queryFn: async () => (await financeSettingsApi.get()).data,
+  });
+
+  const saveMutation = useApiMutation((data) => financeSettingsApi.update(data), {
+    // New Sale reads these from /api/auth/me/, so both caches must refresh.
+    invalidates: [qk.finance.settings, qk.auth.me],
+  });
+
+  const saved = settingsQuery.data || {};
+  const changed = fields.filter((f) => differs(f, draft[f.name], saved[f.name]));
+  const locked = !settingsQuery.data;
+  const valueOf = (f) => draft[f.name] ?? saved[f.name] ?? (f.type === 'toggle' ? false : '');
+
+  function edit(name, value) {
+    setDraft((prev) => ({ ...prev, [name]: value }));
+    setSuccess(false);
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setBanner(null);
+    const problems = {};
+    changed.forEach((f) => {
+      const number = Number(draft[f.name]);
+      if (f.type === 'percent' && !(number >= 0 && number <= f.max)) {
+        problems[f.name] = `Enter a number between 0 and ${f.max}.`;
+      }
+    });
+    setErrors(problems);
+    if (!changed.length || Object.keys(problems).length) return;
+    try {
+      await saveMutation.mutateAsync(
+        Object.fromEntries(changed.map((f) => [f.name, draft[f.name]])),
+      );
+      await settingsQuery.refetch();
+      setDraft({});
+      setSuccess(true);
+    } catch (err) {
+      const parsed = parseServerError(err);
+      setErrors(parsed.fields);
+      setBanner(parsed.banner);
+    }
+  }
+
+  return (
+    <section className="card p-5">
+      <h2 className="text-lg font-bold tracking-tight text-slate-900">{title}</h2>
+      <p className="mt-1 text-sm text-slate-500">{description}</p>
+
+      {settingsQuery.isError ? (
+        <div
+          className="mt-4 flex flex-wrap items-center gap-3 rounded-control border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800"
+          role="alert"
+        >
+          <span>Could not load settings — {apiErrorMessage(settingsQuery.error)}</span>
+          <button
+            type="button"
+            className="btn-secondary px-2.5 py-1 text-xs"
+            onClick={() => settingsQuery.refetch()}
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
+
+      {banner ? (
+        <div
+          className="mt-4 rounded-control border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm font-medium text-rose-700"
+          role="alert"
+        >
+          {banner}
+        </div>
+      ) : null}
+
+      <form onSubmit={handleSubmit} noValidate className="mt-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {fields.map((f) => (
+            <FormField
+              key={f.name}
+              label={f.label}
+              error={errors[f.name]}
+              hint={f.hint}
+              className={f.type === 'toggle' ? 'sm:col-span-2' : ''}
+            >
+              {f.type === 'toggle' ? (
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(valueOf(f))}
+                    onChange={(e) => edit(f.name, e.target.checked)}
+                    disabled={locked}
+                  />
+                  {f.text}
+                </label>
+              ) : f.type === 'select' ? (
+                <select
+                  className="input"
+                  aria-label={f.label}
+                  value={String(valueOf(f))}
+                  onChange={(e) => edit(f.name, Number(e.target.value))}
+                  disabled={locked}
+                >
+                  {f.options.map(([value, text]) => (
+                    <option key={value} value={value}>
+                      {text}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="relative">
+                  <input
+                    className="input pr-10"
+                    type="number"
+                    min="0"
+                    max={f.max}
+                    step="0.01"
+                    name={f.name}
+                    aria-label={f.label}
+                    value={valueOf(f)}
+                    onChange={(e) => edit(f.name, e.target.value)}
+                    disabled={locked}
+                  />
+                  <span
+                    className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-slate-400"
+                    aria-hidden="true"
+                  >
+                    %
+                  </span>
+                </div>
+              )}
+            </FormField>
+          ))}
+        </div>
+
+        <div className="mt-5 flex items-center justify-end gap-3 border-t border-slate-200 pt-4">
+          {success ? (
+            <span className="text-sm font-medium text-emerald-700" role="status">
+              Saved.
+            </span>
+          ) : null}
+          <button
+            type="submit"
+            className="btn-primary"
+            disabled={!changed.length || saveMutation.isPending}
+          >
+            {saveMutation.isPending ? 'Saving...' : 'Save changes'}
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
+/** Business logo: upload when there is none, otherwise update or remove it. */
+function LogoCard() {
+  const { user } = useAuth();
+  const [logo, setLogo] = useState(null);
+  const [updating, setUpdating] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [banner, setBanner] = useState(null);
+  const [success, setSuccess] = useState('');
+
+  // me() carries the resolved media URL; it refetches after each change.
   const currentLogo = user && user.business_logo ? user.business_logo : null;
+  const showPicker = !currentLogo || updating;
 
   const saveMutation = useApiMutation((formData) => businessApi.uploadLogo(formData), {
     invalidates: [qk.auth.me],
   });
+  const removeMutation = useApiMutation(() => businessApi.removeLogo(), {
+    invalidates: [qk.auth.me],
+  });
+
+  function reset() {
+    setLogo(null);
+    setUpdating(false);
+    setBanner(null);
+  }
 
   async function handleSubmit(event) {
     event.preventDefault();
     if (!logo) return;
     setBanner(null);
-    setSuccess(false);
+    setSuccess('');
     try {
       const formData = new FormData();
       formData.append('logo', logo);
       await saveMutation.mutateAsync(formData);
-      setLogo(null);
-      setSuccess(true);
+      setSuccess(currentLogo ? 'Logo updated.' : 'Logo uploaded.');
+      reset();
     } catch (error) {
-      setBanner(error && error.message ? error.message : apiErrorMessage(error));
+      setBanner(apiErrorMessage(error));
     }
+  }
+
+  async function handleRemove() {
+    setBanner(null);
+    setSuccess('');
+    try {
+      await removeMutation.mutateAsync();
+      setSuccess('Logo removed.');
+      reset();
+    } catch (error) {
+      setBanner(apiErrorMessage(error));
+    }
+    setConfirmRemove(false);
   }
 
   return (
     <section className="card p-5">
       <h2 className="text-lg font-bold tracking-tight text-slate-900">Business logo</h2>
-      <p className="mt-1 text-sm text-slate-500">
-        Used on printed invoices, bills and receipts.
-      </p>
+      <p className="mt-1 text-sm text-slate-500">Used on printed invoices, bills and receipts.</p>
 
       {currentLogo ? (
         <div className="mt-4">
@@ -373,7 +330,7 @@ function LogoCard() {
           className="mt-4 rounded-control border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-sm font-medium text-emerald-700"
           role="status"
         >
-          Logo updated — it now appears on the top bar and printed bills.
+          {success}
         </div>
       ) : null}
 
@@ -386,27 +343,75 @@ function LogoCard() {
         </div>
       ) : null}
 
-      <form onSubmit={handleSubmit} noValidate className="mt-4 space-y-4">
-        <PhotoUpload
-          label="Logo"
-          value={logo}
-          onChange={setLogo}
-          hint="JPG or PNG. Compressed to about 200 KB before upload."
-        />
+      {showPicker ? (
+        <form onSubmit={handleSubmit} noValidate className="mt-4 space-y-4">
+          <PhotoUpload
+            label={currentLogo ? 'New logo' : 'Logo'}
+            value={logo}
+            onChange={setLogo}
+            noun="logo"
+            hint="JPG or PNG. Compressed to about 200 KB before upload."
+          />
+          <div className="flex flex-wrap gap-2">
+            <button type="submit" className="btn-primary" disabled={saveMutation.isPending || !logo}>
+              {saveMutation.isPending
+                ? 'Uploading...'
+                : currentLogo
+                  ? 'Save new logo'
+                  : 'Upload logo'}
+            </button>
+            {currentLogo ? (
+              <button type="button" className="btn-secondary" onClick={reset}>
+                Cancel
+              </button>
+            ) : null}
+          </div>
+        </form>
+      ) : (
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => {
+              setSuccess('');
+              setUpdating(true);
+            }}
+          >
+            Update logo
+          </button>
+          <button type="button" className="btn-danger" onClick={() => setConfirmRemove(true)}>
+            Remove logo
+          </button>
+        </div>
+      )}
 
-        <button
-          type="submit"
-          className="btn-primary"
-          disabled={saveMutation.isPending || !logo}
-        >
-          {saveMutation.isPending ? 'Uploading...' : 'Save logo'}
-        </button>
-      </form>
+      <Modal
+        open={confirmRemove}
+        onClose={() => setConfirmRemove(false)}
+        title="Remove logo?"
+        description="Bills and the top bar will no longer show a logo."
+        size="sm"
+        footer={
+          <>
+            <button type="button" className="btn-secondary" onClick={() => setConfirmRemove(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-danger"
+              onClick={handleRemove}
+              disabled={removeMutation.isPending}
+            >
+              {removeMutation.isPending ? 'Removing...' : 'Remove'}
+            </button>
+          </>
+        }
+      />
     </section>
   );
 }
 
-/** /settings/manage-business — business identity: tax rate, installment interest rate and logo. */
+/** /settings/manage-business — grouped as sales, installments and branding. */
 export default function ManageBusinessPage() {
   useDocumentTitle('Manage Business');
 
@@ -414,11 +419,17 @@ export default function ManageBusinessPage() {
     <div className="space-y-6">
       <PageHeader
         title="Manage Business"
-        description="Tax rate, installment interest rate and business identity settings."
+        description="Sales, installment and branding settings."
       />
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <TaxRateCard />
-        <InstallmentInterestRateCard />
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <div className="space-y-6">
+          <SettingsCard title="Sales" description="Applies to every new sale." fields={SALES_FIELDS} />
+          <SettingsCard
+            title="Installments"
+            description="Rules for new installment sales. Plans already sold keep their amounts."
+            fields={INSTALLMENT_FIELDS}
+          />
+        </div>
         <LogoCard />
       </div>
     </div>

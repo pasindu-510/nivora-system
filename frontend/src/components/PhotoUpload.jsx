@@ -18,6 +18,7 @@ export default function PhotoUpload({
   error,
   accept = 'image/*',
   id = 'photo-upload',
+  noun = 'photo',
 }) {
   const inputRef = useRef(null);
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -99,7 +100,7 @@ export default function PhotoUpload({
               aria-label={label}
             />
             <button type="button" className="btn-secondary" onClick={() => inputRef.current && inputRef.current.click()} disabled={busy}>
-              {busy ? 'Compressing...' : value ? 'Replace photo' : 'Choose photo'}
+              {busy ? 'Compressing...' : value ? `Replace ${noun}` : `Choose ${noun}`}
             </button>
             {value ? (
               <button type="button" className="btn-ghost" onClick={handleRemove} disabled={busy}>

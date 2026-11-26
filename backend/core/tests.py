@@ -49,6 +49,7 @@ from .models import (
     User,
 )
 from .services import (
+    installment_amount,
     record_installment_payment,
     record_purchase_receipt,
     record_sale,
@@ -2666,7 +2667,9 @@ class BusinessFinanceSettingsTests(APITestCase):
         resp = self.client.get(reverse('finance-settings'))
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(
-            set(resp.data.keys()), {'tax_rate', 'installment_interest_rate'},
+            set(resp.data.keys()), {'tax_rate', 'installment_interest_rate', 'min_down_payment_percent',
+             'installments_enabled', 'installment_monthly_interest_rate',
+             'required_guarantors'},
         )
         self.assertEqual(resp.data['tax_rate'], '10.00')
         self.assertIsInstance(resp.data['tax_rate'], str)
@@ -2780,7 +2783,9 @@ class BusinessFinanceSettingsTests(APITestCase):
         self._auth(self.admin)
         resp = self.client.get(reverse('finance-settings'))
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(set(resp.data.keys()), {'tax_rate', 'installment_interest_rate'})
+        self.assertEqual(set(resp.data.keys()), {'tax_rate', 'installment_interest_rate', 'min_down_payment_percent',
+             'installments_enabled', 'installment_monthly_interest_rate',
+             'required_guarantors'})
         self.assertEqual(resp.data['tax_rate'], '10.00')
         self.assertEqual(resp.data['installment_interest_rate'], '0.00')
 
@@ -3507,6 +3512,7 @@ class _StockEntryBase(APITestCase):
         self.item = _make_item(self.biz, 'RC-1', '0', '150', opening=0)
         self.client.force_authenticate(self.admin)
         self.today = timezone.localdate()
+        self.buyer = Customer.objects.create(business=self.biz, name='Buyer')
 
     def _limit(self, days):
         self.biz.backdate_limit_days = days
@@ -3529,6 +3535,8 @@ class _StockEntryBase(APITestCase):
         body = {'branch': self.branch.id,
                 'lines': [{'item': self.item.id, 'quantity': qty}]}
         body.update(extra)
+        if body.get('is_single_payment') is False:
+            body.setdefault('customer', self.buyer.id)
         return self.client.post('/api/sales/', body, format='json')
 
 
@@ -3836,3 +3844,151 @@ class PlanSettingsTests(APITestCase):
         res = self.client.post('/api/customers/', {
             'name': 'C', 'phone': '', 'nic': '', 'address': ''}, format='json')
         self.assertEqual(res.status_code, 201, res.data)
+
+
+class DownPaymentAndLogoRemovalTests(_StockEntryBase):
+    def _installment(self, down, price='150', qty=1):
+        self.item.selling_price = Decimal(price)
+        self.item.save(update_fields=['selling_price'])
+        return self._sell(qty, is_single_payment=False, down_payment=down,
+                          number_of_installments=2)
+
+    def test_minimum_down_payment_rounds_up_to_next_hundred(self):
+        self._stock(20, '1')
+        res = self.client.patch('/api/finance-settings/',
+                                {'min_down_payment_percent': '25'}, format='json')
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(
+            self.client.get('/api/auth/me/').data['business_min_down_payment_percent'],
+            '25.00')
+        self.admin.refresh_from_db()
+        self.client.force_authenticate(self.admin)
+        # 25% of 54,350 = 13,587.50 -> 13,600
+        res = self._installment('13599.99', price='54350')
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('13,600.00 (25% of the total', str(res.data))
+        self.assertEqual(self._installment('13600', price='54350').status_code, 201)
+        # An exact multiple of 100 is not rounded further up.
+        self.assertEqual(self._installment('10000', price='40000').status_code, 201)
+        res = self._installment('50', price='80')
+        self.assertIn('too small for installments', str(res.data))
+        # Paying in full is unaffected.
+        self.assertEqual(self._sell(1).status_code, 201)
+
+    def test_percentage_bounds(self):
+        for value, code in (('0', 200), ('99', 200), ('100', 400), ('-1', 400)):
+            res = self.client.patch('/api/finance-settings/',
+                                    {'min_down_payment_percent': value}, format='json')
+            self.assertEqual(res.status_code, code, value)
+
+    def test_remove_logo(self):
+        self.biz.logo.name = 'business_logos/none.png'
+        self.biz.save(update_fields=['logo'])
+        self.client.force_authenticate(self.cashier)
+        self.assertEqual(self.client.delete('/api/business/logo/').status_code, 403)
+        self.client.force_authenticate(self.admin)
+        self.assertEqual(self.client.delete('/api/business/logo/').status_code, 204)
+        self.biz.refresh_from_db()
+        self.assertFalse(self.biz.logo)
+        self.assertEqual(self.client.delete('/api/business/logo/').status_code, 204)
+
+
+class InstallmentPlanTests(_StockEntryBase):
+    def setUp(self):
+        super().setUp()
+        self.item.selling_price = Decimal('54350')
+        self.item.save(update_fields=['selling_price'])
+        self._stock(20, '40000')
+        self.g1 = Customer.objects.create(business=self.biz, name='G One')
+        self.g2 = Customer.objects.create(business=self.biz, name='G Two')
+
+    def _set(self, **fields):
+        for key, value in fields.items():
+            setattr(self.biz, key, value)
+        self.biz.save()
+        self.admin.refresh_from_db()
+        self.client.force_authenticate(self.admin)
+
+    def _plan(self, **extra):
+        body = {'is_single_payment': False, 'down_payment': '13600',
+                'number_of_installments': 3}
+        body.update(extra)
+        return self._sell(1, **body)
+
+    def test_flat_monthly_interest_rounds_each_installment_up_to_50(self):
+        self._set(installment_monthly_interest_rate=Decimal('5'))
+        res = self._plan()
+        self.assertEqual(res.status_code, 201, res.data)
+        sale = Sale.objects.get(pk=res.data['id'])
+        # 40,750 + 5% x 3 months = 46,862.50; / 3 = 15,620.83 -> 15,650
+        self.assertEqual([i.amount for i in sale.installments.order_by('number')],
+                         [Decimal('15650.00')] * 3)
+        self.assertEqual(
+            (sale.total_cost, sale.remaining_cost, sale.plan_interest),
+            (Decimal('54350.00'), Decimal('46950.00'), Decimal('6200.00')))
+        self.assertEqual(res.data['plan_interest'], '6200.00')
+        profit = self.client.get('/api/reports/profit/').data
+        self.assertEqual(Decimal(str(profit['interest_income'])), Decimal('6200'))
+        sheet = self.client.get('/api/reports/balance-sheet/').data
+        self.assertEqual(Decimal(str(sheet['assets']['receivables'])), Decimal('46950'))
+        self.assertEqual(Decimal(str(sheet['equity']['retained_earnings'])),
+                         Decimal('20550'))
+        # The whole plan can be paid off and closes the sale.
+        inst = sale.installments.order_by('number').first()
+        res = self.client.post(f'/api/sales/{sale.id}/pay_installment/',
+                               {'installment': inst.id, 'amount': '46950'},
+                               format='json')
+        self.assertEqual(res.data['status'], Sale.CLOSED, res.data)
+
+    def test_weekly_plan_counts_30_days_as_a_month(self):
+        # 3,000 x (1 + 10% x 8x7/30) / 8 = 445 -> 450
+        self.assertEqual(
+            installment_amount(Decimal('3000'), Decimal('10'), 8, Sale.WEEKLY, 7),
+            Decimal('450.00'))
+        # Already a multiple of 50: not pushed further up.
+        self.assertEqual(
+            installment_amount(Decimal('3000'), Decimal('5'), 3, Sale.MONTHLY, 30),
+            Decimal('1150.00'))
+
+    def test_no_rate_keeps_the_exact_split(self):
+        res = self._plan()
+        sale = Sale.objects.get(pk=res.data['id'])
+        self.assertEqual((sale.plan_interest, sale.remaining_cost),
+                         (Decimal('0.00'), Decimal('40750.00')))
+
+    def test_installments_can_be_turned_off(self):
+        self._set(installments_enabled=False)
+        res = self._plan()
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('turned off', str(res.data))
+        self.assertEqual(self._sell(1).status_code, 201)
+
+    def test_customer_and_guarantors_are_required(self):
+        self.assertEqual(self._plan(customer=None).status_code, 400)
+        self.assertEqual(self._plan(guarantors=[self.g1.id]).status_code, 400)
+        self._set(required_guarantors=2)
+        other = Customer.objects.create(
+            business=_make_business('Else'), name='Foreign')
+        for bad in ([], [self.g1.id], [self.g1.id, self.g1.id],
+                    [self.g1.id, self.buyer.id], [self.g1.id, other.id]):
+            self.assertEqual(self._plan(guarantors=bad).status_code, 400, bad)
+        self.assertEqual(
+            self._sell(1, guarantors=[self.g1.id]).status_code, 400)
+        res = self._plan(guarantors=[self.g1.id, self.g2.id])
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual([g['name'] for g in res.data['guarantors']],
+                         ['G One', 'G Two'])
+        for person in (self.g1, self.buyer):
+            res = self.client.delete(f'/api/customers/{person.id}/')
+            self.assertEqual(res.status_code, 400, person.name)
+
+    def test_settings_bounds(self):
+        url = '/api/finance-settings/'
+        for body, code in (
+            ({'required_guarantors': 2}, 200), ({'required_guarantors': 3}, 400),
+            ({'installments_enabled': False}, 200),
+            ({'installment_monthly_interest_rate': '5'}, 200),
+            ({'installment_monthly_interest_rate': '-1'}, 400),
+        ):
+            res = self.client.patch(url, body, format='json')
+            self.assertEqual(res.status_code, code, body)

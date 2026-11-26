@@ -501,7 +501,7 @@ export default function InstallmentPaymentsPage() {
                 />
                 {Number(user?.business_installment_interest_rate || 0) > 0 && (
                   <p className="mt-1 text-xs text-slate-600">
-                    Paying less than the installment amount adds {Number(user.business_installment_interest_rate).toFixed(2)}% interest on the shortfall.
+                    Paying less than the installment amount adds {Number(user.business_installment_interest_rate).toFixed(2)}% delay payment charge on the unpaid part.
                   </p>
                 )}
               </FormField>

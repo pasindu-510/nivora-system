@@ -499,13 +499,21 @@ class SaleDetailSerializer(SaleListSerializer):
     branch_address = serializers.CharField(source='branch.address', read_only=True, default='')
     branch_phone = serializers.CharField(source='branch.phone', read_only=True, default='')
     discount_label = serializers.SerializerMethodField()
+    guarantors = serializers.SerializerMethodField()
 
     class Meta(SaleListSerializer.Meta):
         fields = SaleListSerializer.Meta.fields + [
             'items', 'installments', 'payments',
             'business_name', 'business_address', 'business_phone',
             'branch_address', 'branch_phone', 'discount_label',
-            'business_logo',
+            'business_logo', 'monthly_interest_rate', 'plan_interest', 'guarantors',
+        ]
+
+    def get_guarantors(self, obj):
+        return [
+            {'id': g.id, 'name': g.name, 'phone': g.phone, 'nic': g.nic,
+             'address': g.address}
+            for g in (obj.guarantor_1, obj.guarantor_2) if g
         ]
 
     def get_discount_label(self, obj):
@@ -561,6 +569,9 @@ class SaleCreateSerializer(serializers.Serializer):
         queryset=CashAccount.objects.none(), required=False, allow_null=True
     )
     sale_date = serializers.DateField(required=False, allow_null=True)
+    guarantors = serializers.PrimaryKeyRelatedField(
+        many=True, required=False, queryset=Customer.objects.none()
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -571,6 +582,9 @@ class SaleCreateSerializer(serializers.Serializer):
                 return
             self.fields['branch'].queryset = Branch.objects.for_business(business)
             self.fields['customer'].queryset = Customer.objects.for_business(business)
+            self.fields['guarantors'].child_relation.queryset = (
+                Customer.objects.for_business(business)
+            )
             self.fields['cash_account'].queryset = CashAccount.objects.for_business(business)
             line_fields = self.fields['lines'].child.fields
             line_fields['item'].queryset = Item.objects.for_business(business)
@@ -597,6 +611,7 @@ class SaleCreateSerializer(serializers.Serializer):
                     raise serializers.ValidationError(
                         {'detail': 'Unit prices can only be set on a back-dated sale.'}
                     )
+                self._check_installment_rules(business, attrs)
                 max_installments = business.max_installments
                 number_of_installments = attrs.get('number_of_installments', 0)
                 # Only enforce limit for installment sales (not single payment)
@@ -609,6 +624,36 @@ class SaleCreateSerializer(serializers.Serializer):
                             )
                         })
         return attrs
+
+    @staticmethod
+    def _check_installment_rules(business, attrs):
+        guarantors = attrs.get('guarantors', [])
+        if attrs.get('is_single_payment', True):
+            if guarantors:
+                raise serializers.ValidationError(
+                    {'guarantors': 'Guarantors are only used for installment sales.'}
+                )
+            return
+        if not business.installments_enabled:
+            raise serializers.ValidationError(
+                {'detail': 'Installment sales are turned off for this business.'}
+            )
+        customer = attrs.get('customer')
+        if customer is None:
+            raise serializers.ValidationError(
+                {'customer': 'An installment sale needs a saved customer.'}
+            )
+        needed = business.required_guarantors
+        if len(guarantors) != needed:
+            raise serializers.ValidationError(
+                {'guarantors': f'Installment sales need exactly {needed} guarantor(s).'}
+            )
+        ids = [g.id for g in guarantors]
+        if len(set(ids)) != len(ids) or customer.id in ids:
+            raise serializers.ValidationError(
+                {'guarantors': 'Each guarantor must be a different person from the '
+                               'customer and from each other.'}
+            )
 
     @transaction.atomic
     def create(self, validated_data):
@@ -653,6 +698,7 @@ class SaleCreateSerializer(serializers.Serializer):
             ),
             cash_account=validated_data.get('cash_account'),
             sale_date=validated_data.get('sale_date'),
+            guarantors=validated_data.get('guarantors', []),
         )
         return sale
 
@@ -1019,6 +1065,10 @@ class UserSerializer(serializers.ModelSerializer):
     business_logo = serializers.SerializerMethodField()
     business_backdate_limit_days = serializers.SerializerMethodField()
     business_item_images_enabled = serializers.SerializerMethodField()
+    business_min_down_payment_percent = serializers.SerializerMethodField()
+    business_installments_enabled = serializers.SerializerMethodField()
+    business_installment_monthly_interest_rate = serializers.SerializerMethodField()
+    business_required_guarantors = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -1027,6 +1077,8 @@ class UserSerializer(serializers.ModelSerializer):
             'business', 'branch', 'is_active', 'email', 'business_tax_rate',
             'business_installment_interest_rate', 'business_name', 'business_logo',
             'business_backdate_limit_days', 'business_item_images_enabled',
+            'business_min_down_payment_percent', 'business_installments_enabled',
+            'business_installment_monthly_interest_rate', 'business_required_guarantors',
         ]
 
     def get_business_tax_rate(self, obj):
@@ -1036,6 +1088,22 @@ class UserSerializer(serializers.ModelSerializer):
     def get_business_installment_interest_rate(self, obj):
         business = getattr(obj, 'business', None)
         return str(business.installment_interest_rate) if business is not None else '0'
+
+    def get_business_installments_enabled(self, obj):
+        business = getattr(obj, 'business', None)
+        return business.installments_enabled if business is not None else False
+
+    def get_business_installment_monthly_interest_rate(self, obj):
+        business = getattr(obj, 'business', None)
+        return str(business.installment_monthly_interest_rate) if business is not None else '0'
+
+    def get_business_required_guarantors(self, obj):
+        business = getattr(obj, 'business', None)
+        return business.required_guarantors if business is not None else 0
+
+    def get_business_min_down_payment_percent(self, obj):
+        business = getattr(obj, 'business', None)
+        return str(business.min_down_payment_percent) if business is not None else '0'
 
     def get_business_item_images_enabled(self, obj):
         business = getattr(obj, 'business', None)
@@ -1103,9 +1171,24 @@ class BusinessFinanceSettingsSerializer(serializers.ModelSerializer):
         max_digits=5, decimal_places=2, min_value=0, max_value=100,
     )
 
+    # 100% would leave nothing to pay in installments.
+    min_down_payment_percent = serializers.DecimalField(
+        max_digits=5, decimal_places=2, min_value=0, max_value=99,
+    )
+
+    installments_enabled = serializers.BooleanField()
+    installment_monthly_interest_rate = serializers.DecimalField(
+        max_digits=5, decimal_places=2, min_value=0, max_value=100,
+    )
+    required_guarantors = serializers.IntegerField(min_value=0, max_value=2)
+
     class Meta:
         model = Business
-        fields = ['tax_rate', 'installment_interest_rate']
+        fields = [
+            'tax_rate', 'installment_interest_rate', 'min_down_payment_percent',
+            'installments_enabled', 'installment_monthly_interest_rate',
+            'required_guarantors',
+        ]
 
 
 # ── Seasonal discounts ──────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ model boundaries:
 All mutating functions run inside ``transaction.atomic``.
 """
 from datetime import datetime, time, timedelta
-from decimal import ROUND_DOWN, Decimal
+from decimal import ROUND_CEILING, ROUND_DOWN, Decimal
 
 from django.db import IntegrityError, transaction
 from django.db.models import F, Sum
@@ -161,6 +161,27 @@ def allocate_fifo(business, item, quantity, branch=None, as_of=None):
     return allocations, unit_cost.quantize(Decimal('0.01')), True
 
 
+def minimum_down_payment(business, total):
+    """``total × min_down_payment_percent``, rounded UP to the next 100."""
+    percent = Decimal(business.min_down_payment_percent or 0)
+    if percent <= 0:
+        return Decimal('0.00')
+    hundreds = (total * percent / Decimal(10000)).to_integral_value(rounding=ROUND_CEILING)
+    return (hundreds * 100).quantize(Decimal('0.01'))
+
+
+def installment_amount(balance, monthly_rate, count, frequency, interval_days):
+    """Equal installment with flat monthly interest, rounded UP to the next 50.
+
+    ``balance × (1 + rate% × months) / count``. A monthly plan has one month per
+    installment; other plans count 30 days as a month.
+    """
+    days = 30 if frequency == Sale.MONTHLY else interval_days
+    # One division, so an exact multiple of 50 is not pushed up by rounding noise.
+    fifties = (balance * (3000 + monthly_rate * count * days)) / (Decimal(150000) * count)
+    return (fifties.to_integral_value(rounding=ROUND_CEILING) * 50).quantize(Decimal('0.01'))
+
+
 # ── Sale recording (spec 5.2) ───────────────────────────────────────────────
 
 @transaction.atomic
@@ -170,7 +191,7 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
                 number_of_installments=0,
                 installment_frequency=Sale.MONTHLY,
                 installment_interval_days=30, cash_account=None,
-                max_discount_percent=None, sale_date=None):
+                max_discount_percent=None, sale_date=None, guarantors=()):
     """Create a sale with items, FIFO costs, installments and payments.
 
     ``lines`` is a list of ``{'item': Item, 'quantity': int}``, optionally
@@ -187,6 +208,9 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
       clamped to subtotal.
     * ``tax_amount`` = (subtotal − discount_amount) × tax_rate/100.
     * ``total_cost`` = subtotal − discount_amount + tax_amount.
+
+    With a monthly interest rate every installment is equal (see
+    :func:`installment_amount`) and the extra is stored as ``plan_interest``.
 
     Single-payment sales record one cash payment immediately. Installment
     sales collect ``down_payment`` and split the remaining balance into
@@ -312,12 +336,36 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
         )
     else:
         down = Decimal(down_payment or 0)
+        minimum = minimum_down_payment(business, total_cost)
+        if minimum >= total_cost and minimum > 0:
+            raise ValueError(
+                f'This order is too small for installments: the minimum down payment '
+                f'({minimum:,.2f}) is not below the total ({total_cost:,.2f}).'
+            )
+        if down < minimum:
+            raise ValueError(
+                f'The minimum down payment for this sale is {minimum:,.2f} '
+                f'({business.min_down_payment_percent.normalize():f}% of the total, '
+                f'rounded up to the next 100).'
+            )
         if down >= total_cost:
             raise ValueError('Down payment must be lower than total cost.')
         if number_of_installments <= 0:
             raise ValueError('Installment sales need a positive installment count.')
         sale.down_payment = down
-        sale.remaining_cost = (total_cost - down).quantize(Decimal('0.01'))
+        balance = (total_cost - down).quantize(Decimal('0.01'))
+        rate = Decimal(business.installment_monthly_interest_rate or 0)
+        amounts = None
+        if rate > 0:
+            each = installment_amount(
+                balance, rate, number_of_installments,
+                installment_frequency, installment_interval_days,
+            )
+            amounts = [each] * number_of_installments
+            sale.monthly_interest_rate = rate
+            sale.plan_interest = sum(amounts) - balance
+        sale.remaining_cost = balance + sale.plan_interest
+        sale.guarantor_1, sale.guarantor_2 = (list(guarantors) + [None, None])[:2]
 
         _create_installments(
             sale,
@@ -325,6 +373,7 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
             count=number_of_installments,
             first_due=sale_date or timezone.localdate(),
             interval_days=installment_interval_days,
+            amounts=amounts,
         )
         if down > 0:
             Payment.objects.create(
@@ -333,7 +382,10 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
                 received_by=created_by,
             )
 
-    sale.save(update_fields=['down_payment', 'remaining_cost', 'status'])
+    sale.save(update_fields=[
+        'down_payment', 'remaining_cost', 'status', 'monthly_interest_rate',
+        'plan_interest', 'guarantor_1', 'guarantor_2',
+    ])
     if sale_date:
         # created_at is auto_now_add, so it can only be moved with update().
         # Reports and bills all read it.
@@ -344,8 +396,11 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
     return sale
 
 
-def _create_installments(sale, *, remaining, count, first_due, interval_days):
+def _create_installments(sale, *, remaining, count, first_due, interval_days,
+                         amounts=None):
     """Split ``remaining`` into ``count`` installments with cent rounding.
+
+    ``amounts`` (a plan with interest) is used as given instead.
 
     The rounding remainder is distributed across the earlier installments
     so that the sum of installment amounts exactly equals ``remaining``.
@@ -362,6 +417,7 @@ def _create_installments(sale, *, remaining, count, first_due, interval_days):
             break
         sizes[i] = (sizes[i] + Decimal('0.01')).quantize(Decimal('0.01'))
         leftover_cents -= 1
+    sizes = amounts or sizes
 
     rows = [
         Installment(

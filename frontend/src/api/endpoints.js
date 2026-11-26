@@ -246,6 +246,8 @@ export const businessApi = {
   getLogo: () => api.get('/business/logo/'),
   /** POST /api/business/logo/ — multipart FormData { logo: File } */
   uploadLogo: (formData) => api.post('/business/logo/', formData),
+  /** DELETE /api/business/logo/ */
+  removeLogo: () => api.delete('/business/logo/'),
 };
 
 /* --------------------------------- Reports -------------------------------- */

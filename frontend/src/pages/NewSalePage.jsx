@@ -8,13 +8,13 @@ import {
   salesApi,
   itemsApi,
   branchesApi,
-  customersApi,
   cashAccountsApi,
 } from '../api/endpoints.js';
 import { qk } from '../api/queryKeys.js';
 import { apiErrorMessage } from '../api/client.js';
 import { formatLKR } from '../utils/format.js';
 import PageHeader from '../components/PageHeader.jsx';
+import CustomerPicker from '../components/CustomerPicker.jsx';
 import EntryDateField, { pastDate, useBackdate } from '../components/EntryDateField.jsx';
 
 /** Installment frequency choices mirror `Sale.FREQUENCY_CHOICES` on the backend. */
@@ -56,17 +56,15 @@ export default function NewSalePage() {
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [branchId, setBranchId] = useState('');
-  const [customerId, setCustomerId] = useState('');
-  const [customerSearch, setCustomerSearch] = useState('');
-  const [debouncedCustomerSearch, setDebouncedCustomerSearch] = useState('');
-  // Keep the chosen customer visible even when a new search no longer matches it.
-  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [customer, setCustomer] = useState(null);
+  const [guarantors, setGuarantors] = useState([null, null]);
   const [cart, setCart] = useState([]);
   const [discountType, setDiscountType] = useState(DISCOUNT_PERCENT);
   const [discountValue, setDiscountValue] = useState('0');
   const [taxRate, setTaxRate] = useState('');
   const [isSinglePayment, setIsSinglePayment] = useState(true);
-  const [downPayment, setDownPayment] = useState('0');
+  // Empty means "use the minimum", so it follows the cart total.
+  const [downPayment, setDownPayment] = useState('');
   const [installmentCount, setInstallmentCount] = useState('3');
   const [installmentFrequency, setInstallmentFrequency] = useState('MONTHLY');
   const [installmentIntervalDays, setInstallmentIntervalDays] = useState('30');
@@ -84,23 +82,10 @@ export default function NewSalePage() {
     return () => clearTimeout(timer);
   }, [search]);
 
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedCustomerSearch(customerSearch.trim()), 300);
-    return () => clearTimeout(timer);
-  }, [customerSearch]);
-
   // ── Queries ───────────────────────────────────────────────────────────────
   const branchesQuery = useQuery({
     queryKey: qk.branches.list({ is_active: true }),
     queryFn: async () => (await branchesApi.list({ is_active: true })).data,
-  });
-
-  const customersQuery = useQuery({
-    // Server-side search (name / phone / NIC) so shops with many customers
-    // can find anyone, not just the first page.
-    queryKey: qk.customers.list({ q: debouncedCustomerSearch, page_size: 100, ordering: 'name' }),
-    queryFn: async () =>
-      (await customersApi.list({ q: debouncedCustomerSearch, page_size: 100, ordering: 'name' })).data,
   });
 
   const cashAccountsQuery = useQuery({
@@ -130,15 +115,6 @@ export default function NewSalePage() {
     const rows = (branchesQuery.data && branchesQuery.data.results) || [];
     return rows.filter((row) => row.is_active);
   }, [branchesQuery.data]);
-
-  const customers = useMemo(() => {
-    const rows = (customersQuery.data && customersQuery.data.results) || [];
-    if (selectedCustomer && !rows.some((row) => row.id === selectedCustomer.id)) {
-      return [selectedCustomer, ...rows];
-    }
-    return rows;
-  }, [customersQuery.data, selectedCustomer]);
-  const customerTotal = (customersQuery.data && customersQuery.data.count) || 0;
 
   const cashAccounts = useMemo(() => {
     const rows = (cashAccountsQuery.data && cashAccountsQuery.data.results) || [];
@@ -252,6 +228,32 @@ export default function NewSalePage() {
     };
   }, [cart, discountType, discountValue, taxRate, businessTaxRate]);
 
+  // Same rule as the server: share of the total, rounded UP to the next 100.
+  const minPercent = toNumber(user?.business_min_down_payment_percent);
+  const totalCents = Math.round(totals.total * 100);
+  const minDown = Math.ceil((totalCents * minPercent) / 1000000 - 1e-9) * 100;
+  const downValue = downPayment === '' ? String(minDown) : downPayment;
+  const tooSmall = minDown > 0 && minDown >= totals.total;
+
+  const installmentsOn = user?.business_installments_enabled !== false;
+  const payInFull = isSinglePayment || !installmentsOn;
+  const needed = Number(user?.business_required_guarantors) || 0;
+  const monthlyRate = toNumber(user?.business_installment_monthly_interest_rate);
+  const count = Math.max(0, Math.floor(toNumber(installmentCount)));
+  const balance = Math.max(0, Math.round((totals.total - toNumber(downValue)) * 100) / 100);
+  // Flat monthly interest, each installment rounded UP to the next 50.
+  const months =
+    installmentFrequency === 'MONTHLY'
+      ? count
+      : (count * (toNumber(installmentIntervalDays) || 30)) / 30;
+  const perInstallment =
+    count === 0
+      ? 0
+      : monthlyRate > 0
+        ? Math.ceil((balance * (1 + (monthlyRate * months) / 100)) / count / 50 - 1e-9) * 50
+        : balance / count;
+  const planTotal = monthlyRate > 0 ? perInstallment * count : balance;
+
   // ── Submit ────────────────────────────────────────────────────────────────
   async function handleSubmit(event) {
     event.preventDefault();
@@ -266,21 +268,39 @@ export default function NewSalePage() {
       return;
     }
 
-    const down = toNumber(downPayment);
-    if (!isSinglePayment) {
+    const down = toNumber(downValue);
+    const chosen = guarantors.slice(0, needed);
+    if (!payInFull) {
+      if (!customer) {
+        setFormError('Select or create the customer for an installment sale.');
+        return;
+      }
+      if (chosen.some((person) => !person)) {
+        setFormError(`Select ${needed} guarantor(s) for an installment sale.`);
+        return;
+      }
+      if (cart.length && tooSmall) {
+        setFormError('This order is too small for installments.');
+        return;
+      }
+      if (down < minDown) {
+        setFormError(`The minimum down payment is ${formatLKR(minDown)}.`);
+        return;
+      }
       if (toNumber(installmentCount) < 1) {
         setFormError('Enter how many installments the customer will pay.');
         return;
       }
       if (down < 0 || down >= totals.total) {
-        setFormError('Down payment must be more than 0 and less than the total.');
+        setFormError('Down payment must be less than the total.');
         return;
       }
     }
 
     const payload = {
       branch: Number(branchId),
-      customer: customerId ? Number(customerId) : null,
+      customer: customer ? customer.id : null,
+      guarantors: payInFull ? [] : chosen.map((person) => person.id),
       lines: cart.map((line) => ({
         item: line.id,
         quantity: line.quantity,
@@ -293,9 +313,9 @@ export default function NewSalePage() {
       discount_type: discountType,
       discount_value: toNumber(discountValue),
       tax_rate: taxRate === '' ? null : toNumber(taxRate),
-      is_single_payment: isSinglePayment,
-      down_payment: isSinglePayment ? totals.total : down,
-      number_of_installments: isSinglePayment ? 0 : toNumber(installmentCount),
+      is_single_payment: payInFull,
+      down_payment: payInFull ? totals.total : down,
+      number_of_installments: payInFull ? 0 : count,
       installment_frequency: installmentFrequency,
       installment_interval_days: toNumber(installmentIntervalDays) || 30,
       cash_account: cashAccountId ? Number(cashAccountId) : null,
@@ -363,48 +383,34 @@ export default function NewSalePage() {
                 ) : null}
               </div>
 
-<div>
-                <label className="label" htmlFor="sale-customer-search">
-                  Customer <span className="font-normal text-slate-400">(optional)</span>
-                </label>
-                <input
-                  id="sale-customer-search"
-                  type="search"
-                  className="input mb-2"
-                  placeholder="Search customer by name, phone or NIC"
-                  value={customerSearch}
-                  onChange={(event) => setCustomerSearch(event.target.value)}
-                />
-                <select
-                  id="sale-customer"
-                  className="input"
-                  aria-label="Customer"
-                  value={customerId}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setCustomerId(value);
-                    setSelectedCustomer(customers.find((row) => String(row.id) === value) || null);
-                  }}
-                >
-                  <option value="">Walk-in customer</option>
-                  {customers.map((row) => (
-                    <option key={row.id} value={row.id}>
-                      {row.name}
-                      {row.phone ? ` — ${row.phone}` : ''}
-                      {row.nic ? ` NIC: ${row.nic}` : ''}
-                    </option>
-                  ))}
-                </select>
-                {customersQuery.isFetching ? (
-                  <p className="mt-1 text-xs text-slate-400">Searching…</p>
-                ) : customerTotal > customers.length ? (
-                  <p className="mt-1 text-xs text-slate-500">
-                    Showing {customers.length} of {customerTotal} customers — type to narrow the list.
-                  </p>
-                ) : debouncedCustomerSearch && customerTotal === 0 ? (
-                  <p className="mt-1 text-xs text-slate-500">No customer matches “{debouncedCustomerSearch}”.</p>
-                ) : null}
-              </div>
+<CustomerPicker
+                label="Customer"
+                required={!payInFull}
+                emptyLabel={payInFull ? 'Walk-in customer' : 'Select a customer'}
+                value={customer}
+                onChange={setCustomer}
+                excludeIds={guarantors.slice(0, needed).filter(Boolean).map((g) => g.id)}
+              />
+
+              {!payInFull &&
+                Array.from({ length: needed }, (_, index) => (
+                  <CustomerPicker
+                    key={index}
+                    label={needed > 1 ? `Guarantor ${index + 1}` : 'Guarantor'}
+                    required
+                    emptyLabel="Select a guarantor"
+                    value={guarantors[index]}
+                    onChange={(person) =>
+                      setGuarantors((current) =>
+                        current.map((g, i) => (i === index ? person : g)),
+                      )
+                    }
+                    excludeIds={[
+                      customer?.id,
+                      ...guarantors.filter((g, i) => g && i !== index).map((g) => g.id),
+                    ].filter(Boolean)}
+                  />
+                ))}
 
               <EntryDateField label="Sale date" value={saleDate} onChange={changeSaleDate} />
             </div>
@@ -485,7 +491,7 @@ export default function NewSalePage() {
           <section className="card p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-base font-bold text-slate-900">Cart</h2>
-              <span className="badge">{cartCount} item(s)</span>
+              <span className="badge">{cartCount} product(s)</span>
             </div>
 
             {cart.length === 0 ? (
@@ -675,30 +681,32 @@ export default function NewSalePage() {
 
           <section className="card p-5">
             <h2 className="text-base font-bold text-slate-900">Payment</h2>
-            <div className="mt-3 flex gap-4">
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                <input
-                  type="radio"
-                  name="payment-mode"
-                  value="single"
-                  checked={isSinglePayment}
-                  onChange={() => setIsSinglePayment(true)}
-                />
-                Pay in full
-              </label>
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                <input
-                  type="radio"
-                  name="payment-mode"
-                  value="installments"
-                  checked={!isSinglePayment}
-                  onChange={() => setIsSinglePayment(false)}
-                />
-                Installments
-              </label>
-            </div>
+            {installmentsOn ? (
+              <div className="mt-3 flex gap-4">
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="radio"
+                    name="payment-mode"
+                    value="single"
+                    checked={isSinglePayment}
+                    onChange={() => setIsSinglePayment(true)}
+                  />
+                  Pay in full
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="radio"
+                    name="payment-mode"
+                    value="installments"
+                    checked={!isSinglePayment}
+                    onChange={() => setIsSinglePayment(false)}
+                  />
+                  Installments
+                </label>
+              </div>
+            ) : null}
 
-            {isSinglePayment ? (
+            {payInFull ? (
               <p className="mt-3 rounded-control bg-slate-50 px-3 py-2 text-sm text-slate-600">
                 The full total of <strong>{formatLKR(totals.total)}</strong> is recorded as paid now.
               </p>
@@ -714,9 +722,20 @@ export default function NewSalePage() {
                     type="number"
                     min="0"
                     step="0.01"
-                    value={downPayment}
+                    value={downValue}
                     onChange={(event) => setDownPayment(event.target.value)}
                   />
+                  {minPercent > 0 && cart.length > 0 ? (
+                    <p
+                      className={`mt-1 text-xs ${
+                        tooSmall || toNumber(downValue) < minDown ? 'text-rose-600' : 'text-slate-500'
+                      }`}
+                    >
+                      {tooSmall
+                        ? 'This order is too small for installments.'
+                        : `Minimum ${formatLKR(minDown)} (${minPercent}%, rounded up to the next 100).`}
+                    </p>
+                  ) : null}
                 </div>
                 <div>
                   <label className="label" htmlFor="sale-installment-count">
@@ -779,20 +798,26 @@ export default function NewSalePage() {
                     disabled={installmentFrequency !== 'CUSTOM'}
                   />
                 </div>
-                <p className="text-xs text-slate-500 sm:col-span-2">
-                  Remaining balance{' '}
-                  <strong className="text-slate-700">
-                    {formatLKR(Math.max(0, totals.total - toNumber(downPayment)))}
-                  </strong>{' '}
-                  will be split into {toNumber(installmentCount) || 0} installment(s).
-                  {installmentFrequency !== 'CUSTOM' && toNumber(installmentCount) > 0 && !isSinglePayment && (
-                    <span className="text-slate-700 ml-2">
-                      per {installmentFrequency.toLowerCase()} installment: {formatLKR(
-                        (Math.max(0, totals.total - toNumber(downPayment))) / toNumber(installmentCount)
-                      )}
-                    </span>
-                  )}
-                </p>
+                <div className="space-y-1 text-xs text-slate-500 sm:col-span-2">
+                  <p>
+                    Balance after down payment{' '}
+                    <strong className="text-slate-700">{formatLKR(balance)}</strong>
+                  </p>
+                  {monthlyRate > 0 && count > 0 ? (
+                    <p>
+                      Interest {monthlyRate}% per month, total to repay{' '}
+                      <strong className="text-slate-700">{formatLKR(planTotal)}</strong> (interest{' '}
+                      {formatLKR(planTotal - balance)})
+                    </p>
+                  ) : null}
+                  {count > 0 ? (
+                    <p>
+                      <strong className="text-slate-700">{count}</strong> installment(s) of{' '}
+                      <strong className="text-slate-700">{formatLKR(perInstallment)}</strong>
+                      {monthlyRate > 0 ? ' each' : ' (about)'}
+                    </p>
+                  ) : null}
+                </div>
               </div>
             )}
 
@@ -812,7 +837,7 @@ export default function NewSalePage() {
             >
               {isSubmitting
                 ? 'Saving sale...'
-                : `Save sale — ${formatLKR(isSinglePayment ? totals.total : toNumber(downPayment))}`}
+                : `Save sale — ${formatLKR(payInFull ? totals.total : toNumber(downValue))}`}
             </button>
             {savedBy ? (
               <p className="mt-2 text-center text-xs text-slate-400">

@@ -1,7 +1,7 @@
 """Customer endpoints (spec 6.4)."""
 from django.db.models import Sum
 from django.http import FileResponse, Http404
-from rest_framework import filters
+from rest_framework import filters, status
 from rest_framework.permissions import AllowAny
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -22,6 +22,18 @@ class CustomerViewSet(TenantModelViewSet):
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'phone', 'nic']
     ordering_fields = ['name', 'created_at']
+    protected_delete_message = (
+        'This customer is a guarantor on a sale and cannot be deleted.'
+    )
+
+    def destroy(self, request, *args, **kwargs):
+        """Keep the buyer of an unpaid sale: the debt must stay traceable."""
+        if self.get_object().sales.filter(status=Sale.OPEN).exists():
+            return Response(
+                {'detail': 'This customer still owes money and cannot be deleted.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
 
     @action(
         detail=True, methods=['get'], url_path='id-card-photo', url_name='id-card-photo',
