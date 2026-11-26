@@ -28,14 +28,14 @@ function validateSupplier(values) {
   return errors;
 }
 
-/** Build the wire payload — trimmed strings, null for empty optional text fields. */
+/** Build the wire payload — trimmed strings; empty optional fields go as ''. */
 function buildPayload(values) {
   return {
     name: values.name.trim(),
-    contact_person: values.contact_person.trim() || null,
-    phone: values.phone.trim() || null,
-    email: values.email.trim() || null,
-    address: values.address.trim() || null,
+    contact_person: values.contact_person.trim(),
+    phone: values.phone.trim(),
+    email: values.email.trim(),
+    address: values.address.trim(),
     is_active: Boolean(values.is_active),
   };
 }

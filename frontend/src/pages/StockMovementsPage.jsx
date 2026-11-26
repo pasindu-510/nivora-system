@@ -110,7 +110,7 @@ export default function StockMovementsPage() {
   const columns = [
     {
       key: 'item_code',
-      header: 'Item',
+      header: 'Product',
       cellClassName: 'font-semibold text-slate-900',
       // Denormalised on the serializer — no item lookup needed for display.
       render: (row) => row.item_code || '—',
@@ -248,9 +248,9 @@ export default function StockMovementsPage() {
           className="input w-full sm:max-w-[12rem]"
           value={itemFilter}
           onChange={(event) => setItemFilter(event.target.value)}
-          aria-label="Filter by item"
+          aria-label="Filter by product"
         >
-          <option value="">All items</option>
+          <option value="">All products</option>
           {items.map((item) => (
             <option key={item.id} value={item.id}>
               {item.code ? `${item.code} — ${item.name}` : item.name}

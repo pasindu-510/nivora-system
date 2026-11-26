@@ -69,7 +69,7 @@ function validatePurchase(values) {
 
 function validateLine(values) {
   const errors = {};
-  if (!values.item) errors.item = 'Choose an item.';
+  if (!values.item) errors.item = 'Choose a product.';
   const quantity = Number(values.quantity);
   if (values.quantity === '' || !Number.isInteger(quantity) || quantity < 1)
     errors.quantity = 'Enter a whole number of 1 or more.';
@@ -592,7 +592,7 @@ export default function StockPurchasesPage() {
         emptyDescription={
           hasFilter
             ? 'Try clearing one or more filters.'
-            : 'Create a purchase order to restock items. Add lines while it is a draft, place the order, then receive deliveries in full or in part.'
+            : 'Create a purchase order to restock products. Add lines while it is a draft, place the order, then receive deliveries in full or in part.'
         }
       />
 
@@ -785,7 +785,7 @@ export default function StockPurchasesPage() {
 
             {/* Lines */}
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Item lines
+              Product lines
             </p>
             {lines.length === 0 ? (
               <div className="rounded-control border border-dashed border-slate-300 bg-slate-50/60 px-4 py-6 text-center text-sm text-slate-500">
@@ -801,7 +801,7 @@ export default function StockPurchasesPage() {
                           scope="col"
                           className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
                         >
-                          Item
+                          Product
                         </th>
                         <th
                           scope="col"
@@ -1008,14 +1008,14 @@ export default function StockPurchasesPage() {
         ) : null}
         <form id="purchase-line-form" onSubmit={handleLineSubmit} noValidate>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <FormField label="Item" required error={lineErrors.item} className="sm:col-span-2">
+            <FormField label="Product" required error={lineErrors.item} className="sm:col-span-2">
               <input
                 className="input mb-2"
                 type="text"
                 value={itemSearch}
                 onChange={(event) => setItemSearch(event.target.value)}
-                placeholder="Search by item code or name..."
-                aria-label="Search items"
+                placeholder="Search by product code or name..."
+                aria-label="Search products"
               />
               <select
                 className="input"
@@ -1024,7 +1024,7 @@ export default function StockPurchasesPage() {
                 onChange={setLineField('item')}
               >
                 <option value="" disabled={itemQuery.isPending}>
-                  {itemQuery.isPending ? 'Loading items...' : 'Select an item'}
+                  {itemQuery.isPending ? 'Loading products...' : 'Select a product'}
                 </option>
                 {itemOptions.map((item) => (
                   <option key={item.id} value={item.id}>
@@ -1034,7 +1034,7 @@ export default function StockPurchasesPage() {
               </select>
               {itemQuery.isError ? (
                 <p className="mt-1.5 text-xs font-medium text-rose-600" role="alert">
-                  Could not load items — {apiErrorMessage(itemQuery.error)}
+                  Could not load products — {apiErrorMessage(itemQuery.error)}
                 </p>
               ) : null}
             </FormField>

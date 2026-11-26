@@ -204,6 +204,8 @@ Conventions:
 | max_installments | uint | yes | null | null = unlimited; enforced on sale create |
 | max_users | uint | yes | null | null = unlimited; ≥1 if set |
 | max_branches | uint | yes | null | null = unlimited; ≥1 if set |
+| max_categories, max_brands, max_items | uint | yes | null | null = unlimited; ≥1 if set; create → 400 `{"detail": "… limit reached (N)…"}` |
+| item_images_enabled | bool | no | true | false → item image upload is rejected and the SPA hides images (stored files are kept) |
 | backdate_limit_days | uint | yes | 0 | 0 = back-dating off, null = unlimited, N = up to N days back (§5.14); super_admin only |
 | created_by | FK User | yes | | set null |
 | created_at, updated_at | datetime | | | |
@@ -632,6 +634,10 @@ not counted anywhere.
   reject when `count(users) >= max_users` → 400 `{"detail": "This business has reached its user limit (N). ..."}`.
 * Creating a business auto-creates branch **"Main Branch"** (copying address/phone).
 
+* Category / brand / item create: same rule with `max_categories`, `max_brands`, `max_items`
+  (inactive items count). Lowering a limit never removes existing rows.
+* The SPA calls items **"Products"** in all visible text; the API, database and routes keep `item`.
+
 ### 5.13 Field visibility
 
 * Cashier: `cost_price` removed from item payloads (and `next_cost`, `stock_value` from
@@ -662,7 +668,7 @@ except health, login, refresh. Trailing slashes are required. "CRUD" =
 | GET | `/auth/me/` | — | `<User>` |
 
 `<User>` = `{id, username, full_name, phone, role, business, branch, is_active, email,
-business_tax_rate:"15.00", business_installment_interest_rate:"0.00", business_backdate_limit_days:0,
+business_tax_rate:"15.00", business_installment_interest_rate:"0.00", business_backdate_limit_days:0, business_item_images_enabled:true,
 business_name, business_logo:"/media/business_logos/x.png"|null}`
 (`business_tax_rate` etc. are `"0"`/null when user has no business).
 
@@ -812,7 +818,7 @@ includes overdue (any date ≤ today+days) where not fully settled; ordered due_
 
 `/admin/businesses/` (super_admin) — `GET, POST, PATCH, DELETE`. Fields
 `id,name,address,phone,email,logo,is_active,tax_rate,cashier_discount_cap,max_users,max_branches,
-backdate_limit_days,
+backdate_limit_days,max_categories,max_brands,max_items,item_images_enabled,
 item_count,category_count,brand_count,branch_count,user_count,created_at,updated_at`.
 Create auto-adds "Main Branch".
 

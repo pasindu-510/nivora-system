@@ -59,7 +59,7 @@ export default function StockAdjustModal({ open, onClose, branches }) {
     setBanner(null);
     const quantity = parseInt(form.quantity, 10);
     const clientErrors = {};
-    if (!itemId) clientErrors.item = 'Choose an item.';
+    if (!itemId) clientErrors.item = 'Choose a product.';
     if (!branchId) clientErrors.branch = 'Choose a branch.';
     if (!(quantity > 0)) clientErrors.quantity = 'Enter a whole number above 0.';
     if (!form.note.trim()) clientErrors.note = 'Give a reason so the change can be traced later.';
@@ -76,7 +76,7 @@ export default function StockAdjustModal({ open, onClose, branches }) {
         },
       });
       setDone(
-        `${selected ? selected.name : 'Item'}: ${form.direction === 'remove' ? 'removed' : 'added'} ${quantity}. ` +
+        `${selected ? selected.name : 'Product'}: ${form.direction === 'remove' ? 'removed' : 'added'} ${quantity}. ` +
           `New total stock: ${response.data.new_stock}.`,
       );
       setForm(EMPTY);
@@ -119,16 +119,16 @@ export default function StockAdjustModal({ open, onClose, branches }) {
         </div>
       ) : null}
       <form id="stock-adjust-form" onSubmit={handleSubmit} noValidate className="space-y-4">
-        <FormField label="Item" required error={errors.item}>
+        <FormField label="Product" required error={errors.item}>
           <input
             type="search"
             className="input mb-2"
-            placeholder="Search by item code or name"
+            placeholder="Search by product code or name"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <select className="input" value={itemId} onChange={(event) => setItemId(event.target.value)} aria-label="Item">
-            <option value="">{itemsQuery.isFetching ? 'Searching…' : 'Select an item'}</option>
+          <select className="input" value={itemId} onChange={(event) => setItemId(event.target.value)} aria-label="Product">
+            <option value="">{itemsQuery.isFetching ? 'Searching…' : 'Select a product'}</option>
             {items.map((row) => (
               <option key={row.id} value={row.id}>
                 {row.code} — {row.name} ({row.stock_quantity} in stock)
@@ -182,7 +182,7 @@ export default function StockAdjustModal({ open, onClose, branches }) {
           <FormField
             label="Unit cost"
             error={errors.unitCost}
-            hint="Used for profit calculations. Leave blank to use the item's last cost."
+            hint="Used for profit calculations. Leave blank to use the product's last cost."
           >
             <input
               className="input"

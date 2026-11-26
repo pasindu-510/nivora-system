@@ -39,9 +39,9 @@ function validateCustomer(values) {
 function buildPayload(values) {
   const base = {
     name: values.name.trim(),
-    phone: values.phone.trim() || null,
-    nic: values.nic.trim() || null,
-    address: values.address.trim() || null,
+    phone: values.phone.trim(),
+    nic: values.nic.trim(),
+    address: values.address.trim(),
   };
 
   if (!(values.id_card_photo instanceof File)) return base;

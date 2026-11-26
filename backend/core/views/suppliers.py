@@ -154,7 +154,7 @@ class PurchaseViewSet(TenantModelViewSet):
         purchase = self.get_object()
         if purchase.status in (Purchase.RECEIVED, Purchase.CANCELLED):
             return Response(
-                {'detail': 'Cannot add items to a received or cancelled order.'},
+                {'detail': 'Cannot add products to a received or cancelled order.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         ser = PurchaseItemCreateSerializer(
@@ -205,7 +205,7 @@ class PurchaseViewSet(TenantModelViewSet):
             )
         if not purchase.items.exists():
             return Response(
-                {'detail': 'Order has no item lines.'},
+                {'detail': 'Order has no product lines.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         purchase.status = Purchase.ORDERED

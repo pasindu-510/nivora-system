@@ -262,7 +262,7 @@ export default function NewSalePage() {
       return;
     }
     if (cart.length === 0) {
-      setFormError('Add at least one item to the cart.');
+      setFormError('Add at least one product to the cart.');
       return;
     }
 
@@ -323,7 +323,7 @@ export default function NewSalePage() {
     <div className="space-y-6">
       <PageHeader
         title="New Sale"
-        description="Search items, build the cart, and record a walk-in or customer sale."
+        description="Search products, build the cart, and record a walk-in or customer sale."
         actions={
           cart.length > 0 ? (
             <button type="button" className="btn-secondary" onClick={clearCart} disabled={busy}>
@@ -418,13 +418,13 @@ export default function NewSalePage() {
 
           <section className="card p-5">
             <label className="label" htmlFor="sale-search">
-              Search items
+              Search products
             </label>
             <input
               id="sale-search"
               className="input"
               type="search"
-              placeholder="Search by item code or name"
+              placeholder="Search by product code or name"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               autoComplete="off"
@@ -440,10 +440,10 @@ export default function NewSalePage() {
               {!itemsQuery.isError && itemResults.length === 0 ? (
                 <p className="px-1 py-6 text-center text-sm text-slate-500">
                   {itemsQuery.isPending
-                    ? 'Loading items...'
+                    ? 'Loading products...'
                     : debouncedSearch
-                      ? `No items match "${debouncedSearch}".`
-                      : 'Start typing to search for items.'}
+                      ? `No products match "${debouncedSearch}".`
+                      : 'Start typing to search for products.'}
                 </p>
               ) : null}
 
@@ -495,7 +495,7 @@ export default function NewSalePage() {
                 <table className="w-full min-w-[34rem] text-sm">
                   <thead>
                     <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
-                      <th className="py-2 pr-3 font-semibold">Item</th>
+                      <th className="py-2 pr-3 font-semibold">Product</th>
                       <th className="py-2 pr-3 font-semibold">Price</th>
                       <th className="py-2 pr-3 font-semibold">Qty</th>
                       <th className="py-2 pr-3 text-right font-semibold">Amount</th>

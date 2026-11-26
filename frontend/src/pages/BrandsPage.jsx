@@ -252,12 +252,12 @@ export default function BrandsPage() {
         rows={rows}
         rowKey={(row) => row.id}
         loading={listQuery.isPending}
-        caption="Item brands"
+        caption="Product brands"
         emptyTitle={debouncedSearch ? 'No brands match your search' : 'No brands yet'}
         emptyDescription={
           debouncedSearch
             ? 'Try a different name.'
-            : 'Add brands such as Samsung, LG, or Philips so items can be grouped by manufacturer — use “New Brand” above to create one.'
+            : 'Add brands such as Samsung, LG, or Philips so products can be grouped by manufacturer — use “New Brand” above to create one.'
         }
       />
 
@@ -268,8 +268,8 @@ export default function BrandsPage() {
         title={editing ? `Edit ${editing.name}` : 'New brand'}
         description={
           editing
-            ? 'Update the brand name. Items already using it stay linked.'
-            : 'Add a manufacturer or label so items can be grouped and filtered.'
+            ? 'Update the brand name. Products already using it stay linked.'
+            : 'Add a manufacturer or label so products can be grouped and filtered.'
         }
         footer={
           <>
@@ -321,7 +321,7 @@ export default function BrandsPage() {
         title="Delete brand?"
         description={
           deleteTarget
-            ? `${deleteTarget.name} will be permanently removed. Items that use it keep their details but lose the brand.`
+            ? `${deleteTarget.name} will be permanently removed. Products that use it keep their details but lose the brand.`
             : ''
         }
         size="sm"

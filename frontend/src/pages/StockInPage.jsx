@@ -128,7 +128,7 @@ export default function StockInPage() {
   function validate() {
     if (!branch) return 'Choose the branch that receives the stock.';
     if (isPurchase && !supplierId) return 'Choose a supplier.';
-    if (!lines.length) return 'Add at least one item.';
+    if (!lines.length) return 'Add at least one product.';
     for (const line of lines) {
       const quantity = Number(line.quantity);
       if (!Number.isInteger(quantity) || quantity < 1) {
@@ -173,7 +173,7 @@ export default function StockInPage() {
         })),
       });
       setDone(
-        `Stock added: ${data.line_count} item(s), total cost ${formatLKR(data.total_cost)}` +
+        `Stock added: ${data.line_count} product(s), total cost ${formatLKR(data.total_cost)}` +
           (data.order_no ? ` (${data.order_no}).` : '.'),
       );
       setLines([]);
@@ -260,14 +260,14 @@ export default function StockInPage() {
 
         <section className="card p-5">
           <label className="label" htmlFor="stock-in-search">
-            Add items
+            Add products
           </label>
           <input
             id="stock-in-search"
             className="input"
             type="search"
             autoComplete="off"
-            placeholder="Search by item code or name"
+            placeholder="Search by product code or name"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -291,13 +291,13 @@ export default function StockInPage() {
           </ul>
           {!itemsQuery.isPending && items.length === 0 ? (
             <p className="py-3 text-center text-sm text-slate-500">
-              No items found. Create the item on the Items page first.
+              No products found. Create the product on the Products page first.
             </p>
           ) : null}
         </section>
 
         <section className="card p-5">
-          <h2 className="text-base font-bold text-slate-900">Items received</h2>
+          <h2 className="text-base font-bold text-slate-900">Products received</h2>
           {lines.length === 0 ? (
             <p className="py-4 text-center text-sm text-slate-500">Nothing added yet.</p>
           ) : (
@@ -305,7 +305,7 @@ export default function StockInPage() {
               <table className="w-full min-w-[44rem] text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
-                    <th className="py-2 pr-3 font-semibold">Item</th>
+                    <th className="py-2 pr-3 font-semibold">Product</th>
                     <th className="py-2 pr-3 font-semibold">Quantity</th>
                     <th className="py-2 pr-3 font-semibold">Unit cost</th>
                     <th className="py-2 pr-3 font-semibold">New selling price</th>

@@ -165,6 +165,7 @@ function ItemFormFields({
   categories,
   brands,
   lookupLoading,
+  imagesEnabled,
 }) {
   return (
     <>
@@ -258,7 +259,7 @@ function ItemFormFields({
         <FormField
           label="Status"
           error={errors.is_active}
-          hint="Inactive items are hidden from new sales."
+          hint="Inactive products are hidden from new sales."
         >
           <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-700">
             <input
@@ -267,9 +268,10 @@ function ItemFormFields({
               checked={form.is_active}
               onChange={onChange('is_active')}
             />
-            Item is active
+            Product is active
           </label>
         </FormField>
+        {imagesEnabled ? (
         <div className="sm:col-span-2">
           {editing && editing.image && !form.image ? (
             <div className="mb-3 flex items-center gap-3">
@@ -291,6 +293,7 @@ function ItemFormFields({
             error={errors.image}
           />
         </div>
+        ) : null}
       </div>
     </>
   );
@@ -298,10 +301,11 @@ function ItemFormFields({
 
 /* ---------------------------------- page ---------------------------------- */
 export default function ItemsPage() {
-  useDocumentTitle('Items');
+  useDocumentTitle('Products');
 
   const { user } = useAuth();
   const readOnly = Boolean(user && user.role === 'cashier');
+  const imagesEnabled = Boolean(user && user.business_item_images_enabled !== false);
 
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -435,7 +439,7 @@ export default function ItemsPage() {
     }
   }
 
-  const columns = [
+  const allColumns = [
     {
       key: 'image',
       header: '',
@@ -558,14 +562,18 @@ export default function ItemsPage() {
         ]),
   ];
 
+  const columns = imagesEnabled
+    ? allColumns
+    : allColumns.filter((column) => column.key !== 'image');
+
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Items"
+        title="Products"
         description={
           listQuery.isPending
-            ? 'Loading items...'
-            : `${count} ${count === 1 ? 'item' : 'items'}`
+            ? 'Loading products...'
+            : `${count} ${count === 1 ? 'product' : 'products'}`
         }
         actions={
           readOnly ? null : (
@@ -574,7 +582,7 @@ export default function ItemsPage() {
                 Add stock
               </Link>
               <button type="button" className="btn-primary" onClick={openCreate}>
-                + New Item
+                + New Product
               </button>
             </div>
           )
@@ -586,7 +594,7 @@ export default function ItemsPage() {
           className="flex flex-wrap items-center gap-3 rounded-control border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800"
           role="alert"
         >
-          <span>Could not load items — {apiErrorMessage(listQuery.error)}</span>
+          <span>Could not load products — {apiErrorMessage(listQuery.error)}</span>
           <button
             type="button"
             className="btn-secondary px-2.5 py-1 text-xs"
@@ -614,7 +622,7 @@ export default function ItemsPage() {
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           placeholder="Search by code or name..."
-          aria-label="Search items"
+          aria-label="Search products"
         />
         <select
           className="input w-full sm:w-auto sm:min-w-40"
@@ -668,13 +676,13 @@ export default function ItemsPage() {
         rows={rows}
         rowKey={(row) => row.id}
         loading={listQuery.isPending}
-        caption="Catalog items with per-branch stock"
+        caption="Catalog products with per-branch stock"
         onRowClick={readOnly ? undefined : openEdit}
-        emptyTitle={hasFilters ? 'No items match your filters' : 'No items yet'}
+        emptyTitle={hasFilters ? 'No products match your filters' : 'No products yet'}
         emptyDescription={
           hasFilters
             ? 'Try a different search term or clear some filters.'
-            : 'Add your first item to start tracking stock levels, selling prices, and FIFO cost lots.'
+            : 'Add your first product to start tracking stock levels, selling prices, and FIFO cost lots.'
         }
       />
 
@@ -682,11 +690,11 @@ export default function ItemsPage() {
       <Modal
         open={modalOpen}
         onClose={closeModal}
-        title={editing ? `Edit ${editing.name}` : 'New item'}
+        title={editing ? `Edit ${editing.name}` : 'New product'}
         description={
           editing
             ? 'Update pricing, classification, image, and status. Stock changes go through purchases, sales, or stock movements.'
-            : 'Add a catalog item. Add its quantity and cost afterwards on the Stock In page.'
+            : 'Add a catalog product. Add its quantity and cost afterwards on the Stock In page.'
         }
         size="lg"
         footer={
@@ -706,7 +714,7 @@ export default function ItemsPage() {
                   : 'Save changes'
                 : createMutation.isPending
                   ? 'Creating...'
-                  : 'Create item'}
+                  : 'Create product'}
             </button>
           </>
         }
@@ -729,6 +737,7 @@ export default function ItemsPage() {
             categories={categories}
             brands={brands}
             lookupLoading={lookupLoading}
+            imagesEnabled={imagesEnabled}
           />
         </form>
       </Modal>
@@ -737,10 +746,10 @@ export default function ItemsPage() {
       <Modal
         open={Boolean(deleteTarget)}
         onClose={() => setDeleteTarget(null)}
-        title="Delete item?"
+        title="Delete product?"
         description={
           deleteTarget
-            ? `“${deleteTarget.name}” will be removed from the catalog. Items with sale or purchase history cannot be deleted — deactivate them instead.`
+            ? `“${deleteTarget.name}” will be removed from the catalog. Products with sale or purchase history cannot be deleted — deactivate them instead.`
             : ''
         }
         size="sm"

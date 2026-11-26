@@ -258,6 +258,11 @@ class ItemDetailSerializer(ItemListSerializer):
                 self.fields['brand'].queryset = Brand.objects.none()
 
     def validate(self, attrs):
+        business = _request_business(self)
+        if attrs.get('image') and business and not business.item_images_enabled:
+            raise serializers.ValidationError(
+                {'image': 'Product images are turned off for this business.'}
+            )
         # Enforce unique (business, code) scoped to requester's business
         request = self.context.get('request')
         if request and getattr(request, 'user', None) and request.user.is_authenticated:
@@ -270,7 +275,7 @@ class ItemDetailSerializer(ItemListSerializer):
                         qs = qs.exclude(pk=self.instance.pk)
                     if qs.exists():
                         raise serializers.ValidationError({
-                            'code': 'An item with this code already exists in this business.'
+                            'code': 'A product with this code already exists in this business.'
                         })
         return attrs
 
@@ -966,6 +971,15 @@ class BusinessSerializer(serializers.ModelSerializer):
     max_branches = serializers.IntegerField(
         required=False, allow_null=True, min_value=1
     )
+    max_categories = serializers.IntegerField(
+        required=False, allow_null=True, min_value=1
+    )
+    max_brands = serializers.IntegerField(
+        required=False, allow_null=True, min_value=1
+    )
+    max_items = serializers.IntegerField(
+        required=False, allow_null=True, min_value=1
+    )
     # 0 = back-dating off, null = unlimited.
     backdate_limit_days = serializers.IntegerField(
         required=False, allow_null=True, min_value=0, max_value=36500
@@ -982,6 +996,7 @@ class BusinessSerializer(serializers.ModelSerializer):
             'id', 'name', 'address', 'phone', 'email', 'logo',
             'is_active', 'tax_rate', 'cashier_discount_cap',
             'max_users', 'max_branches', 'backdate_limit_days',
+            'max_categories', 'max_brands', 'max_items', 'item_images_enabled',
             'item_count', 'category_count', 'brand_count',
             'branch_count', 'user_count',
             'created_at', 'updated_at',
@@ -1003,6 +1018,7 @@ class UserSerializer(serializers.ModelSerializer):
     business_name = serializers.SerializerMethodField()
     business_logo = serializers.SerializerMethodField()
     business_backdate_limit_days = serializers.SerializerMethodField()
+    business_item_images_enabled = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -1010,7 +1026,7 @@ class UserSerializer(serializers.ModelSerializer):
             'id', 'username', 'full_name', 'phone', 'role',
             'business', 'branch', 'is_active', 'email', 'business_tax_rate',
             'business_installment_interest_rate', 'business_name', 'business_logo',
-            'business_backdate_limit_days',
+            'business_backdate_limit_days', 'business_item_images_enabled',
         ]
 
     def get_business_tax_rate(self, obj):
@@ -1020,6 +1036,10 @@ class UserSerializer(serializers.ModelSerializer):
     def get_business_installment_interest_rate(self, obj):
         business = getattr(obj, 'business', None)
         return str(business.installment_interest_rate) if business is not None else '0'
+
+    def get_business_item_images_enabled(self, obj):
+        business = getattr(obj, 'business', None)
+        return business.item_images_enabled if business is not None else False
 
     def get_business_backdate_limit_days(self, obj):
         # null means unlimited; users without a business get 0 (off).

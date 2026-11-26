@@ -334,7 +334,7 @@ export default function CategoriesPage() {
         emptyDescription={
           query
             ? 'Try a different name.'
-            : 'Build your category tree to group items for filtering and reporting — use “New Category” above to create the first one.'
+            : 'Build your category tree to group products for filtering and reporting — use “New Category” above to create the first one.'
         }
       />
 
@@ -346,7 +346,7 @@ export default function CategoriesPage() {
         description={
           editing
             ? 'Update the name or move this category under a different parent.'
-            : 'Group items for filtering, reporting, and seasonal discounts.'
+            : 'Group products for filtering, reporting, and seasonal discounts.'
         }
         footer={
           <>
@@ -424,7 +424,7 @@ export default function CategoriesPage() {
         title="Delete category?"
         description={
           deleteTarget
-            ? `“${deleteTarget.name}” will be permanently removed. Deleting a category also deletes its sub-categories. Items keep their details but lose the category.`
+            ? `“${deleteTarget.name}” will be permanently removed. Deleting a category also deletes its sub-categories. Products keep their details but lose the category.`
             : ''
         }
         size="sm"

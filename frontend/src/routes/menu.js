@@ -30,7 +30,7 @@ export const menuGroups = [
   {
     label: 'Catalog',
     items: [
-      { label: 'Items', to: '/items', icon: 'box', roles: STAFF },
+      { label: 'Products', to: '/items', icon: 'box', roles: STAFF },
       { label: 'Categories', to: '/categories', icon: 'folder', roles: ADMIN_MANAGER },
       { label: 'Brands', to: '/brands', icon: 'tag', roles: ADMIN_MANAGER },
     ],

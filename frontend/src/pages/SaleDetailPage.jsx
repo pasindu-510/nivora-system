@@ -378,7 +378,7 @@ export default function SaleDetailPage() {
 
       {/* --- Items table --- */}
       <div className="card rounded-control border border-slate-200 p-4">
-        <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Sale items</h2>
+        <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Sale products</h2>
         <DataTable
           columns={[
             {
@@ -390,7 +390,7 @@ export default function SaleDetailPage() {
             },
             {
               key: 'item',
-              header: 'Item',
+              header: 'Product',
               width: '200px',
               align: 'left',
               render: (row) => {
@@ -449,7 +449,7 @@ export default function SaleDetailPage() {
           rows={sale.items || []}
           rowKey={(row) => row.id}
           loading={false}
-          caption="Sale items"
+          caption="Sale products"
         />
       </div>
 

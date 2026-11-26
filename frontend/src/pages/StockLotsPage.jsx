@@ -126,7 +126,7 @@ export default function StockLotsPage() {
   const columns = [
     {
       key: 'item',
-      header: 'Item',
+      header: 'Product',
       // `item_code` / `item_name` are denormalised on the serializer — no lookup.
       render: (row) => (
         <div className="min-w-0">
@@ -280,9 +280,9 @@ export default function StockLotsPage() {
           className="input w-full sm:max-w-[12rem]"
           value={itemFilter}
           onChange={(event) => setItemFilter(event.target.value)}
-          aria-label="Filter by item"
+          aria-label="Filter by product"
         >
-          <option value="">All items</option>
+          <option value="">All products</option>
           {items.map((item) => (
             <option key={item.id} value={item.id}>
               {item.code ? `${item.code} — ${item.name}` : item.name}

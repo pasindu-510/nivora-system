@@ -7,7 +7,7 @@ management surface is Django Admin).
 """
 from django.db.models import ProtectedError
 from rest_framework import status
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
@@ -39,7 +39,25 @@ class TenantModelViewSet(ModelViewSet):
         tenant = self.get_tenant()
         if tenant is None:
             raise PermissionDenied('No business scope for this request.')
+        self.check_plan_limit(tenant)
         serializer.save(business=tenant)
+
+    # Set both on a viewset to cap rows per business (null = unlimited).
+    limit_field = None
+    limit_label = ''
+
+    def check_plan_limit(self, tenant):
+        limit = getattr(tenant, self.limit_field) if self.limit_field else None
+        if limit is None:
+            return
+        model = self.queryset.model
+        if model.objects.filter(business=tenant).count() >= limit:
+            raise ValidationError({
+                'detail': (
+                    f'{self.limit_label} limit reached ({limit}). '
+                    'Ask the platform owner to increase it.'
+                )
+            })
 
     def destroy(self, request, *args, **kwargs):
         """A row still referenced by others (on_delete=PROTECT) answers 400

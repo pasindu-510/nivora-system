@@ -194,7 +194,7 @@ export default function DashboardPage() {
           hint="Across your visible branches"
         />
         <StatCard
-          label="Low stock items"
+          label="Low stock products"
           value={summary.lowStockCount ?? '—'}
           tone={Number(summary.lowStockCount) > 0 ? 'warning' : 'neutral'}
           loading={loading}
@@ -210,7 +210,7 @@ export default function DashboardPage() {
           hint="Overdue and due within 7 days"
         />
         <StatCard
-          label="Top item"
+          label="Top product"
           value={summary.topItem ?? '—'}
           tone="positive"
           loading={loading}
@@ -241,7 +241,7 @@ export default function DashboardPage() {
         <div className="space-y-6">
           <section className="card p-5">
             <h2 className="text-base font-bold text-slate-900">Low stock</h2>
-            <p className="text-xs text-slate-500">Items at or below their reorder level</p>
+            <p className="text-xs text-slate-500">Products at or below their reorder level</p>
             {loading ? (
               <div className="mt-4 space-y-2">
                 <div className="h-4 w-2/3 animate-pulse rounded bg-slate-100" />
@@ -252,7 +252,7 @@ export default function DashboardPage() {
               <ul className="mt-4 divide-y divide-slate-100">
                 {summary.lowStockItems.slice(0, 6).map((item, index) => (
                   <li key={item.id ?? item.code ?? index} className="flex items-center justify-between gap-3 py-2.5 text-sm">
-                    <span className="truncate font-medium text-slate-700">{item.name ?? item.code ?? 'Item'}</span>
+                    <span className="truncate font-medium text-slate-700">{item.name ?? item.code ?? 'Product'}</span>
                     <span className="badge shrink-0 bg-amber-50 text-amber-700">
                       {firstDefined(item.quantity, item.stock_quantity, item.qty, 0)} left
                     </span>
@@ -262,7 +262,7 @@ export default function DashboardPage() {
             ) : (
               <EmptyState
                 title="Stock levels look healthy"
-                description="Items that fall to their low-stock threshold will be flagged here."
+                description="Products that fall to their low-stock threshold will be flagged here."
               />
             )}
           </section>

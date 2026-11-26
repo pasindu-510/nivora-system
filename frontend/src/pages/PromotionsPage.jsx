@@ -23,7 +23,7 @@ const SCOPES = [
   { value: 'ALL', label: 'All' },
   { value: 'CATEGORY', label: 'Category' },
   { value: 'BRAND', label: 'Brand' },
-  { value: 'ITEM', label: 'Item' },
+  { value: 'ITEM', label: 'Product' },
 ];
 
 /** Default for new discounts — computed once, sent explicitly on create. */
@@ -257,7 +257,7 @@ export default function PromotionsPage() {
 
   /** Resolve the target id to a readable label, falling back to `#<id>`. */
   function resolveTarget(row) {
-    if (!row.scope || row.scope === 'ALL') return 'All items';
+    if (!row.scope || row.scope === 'ALL') return 'All products';
     if (!row.target_id) return '—';
     const pool = row.scope === 'CATEGORY' ? categories : row.scope === 'BRAND' ? brands : items;
     const match = pool.find((entry) => entry.id === row.target_id);
@@ -455,13 +455,13 @@ export default function PromotionsPage() {
         rows={rows}
         rowKey={(row) => row.id}
         loading={listQuery.isPending}
-        caption="Seasonal discounts scoped to everything, a category, a brand, or an item"
+        caption="Seasonal discounts scoped to everything, a category, a brand, or a product"
         onRowClick={openEdit}
         emptyTitle={hasFilter ? 'No discounts match these filters' : 'No seasonal discounts yet'}
         emptyDescription={
           hasFilter
             ? 'Try clearing one or more filters.'
-            : 'Create a seasonal discount and it will be applied automatically to matching items at the counter.'
+            : 'Create a seasonal discount and it will be applied automatically to matching products at the counter.'
         }
       />
 
@@ -473,7 +473,7 @@ export default function PromotionsPage() {
         description={
           editing
             ? 'Update the scope, percentage, dates, and active status.'
-            : 'Discount matching items automatically for a date range — everything, a category, a brand, or a single item.'
+            : 'Discount matching products automatically for a date range — everything, a category, a brand, or a single product.'
         }
         size="lg"
         footer={
@@ -604,10 +604,10 @@ export default function PromotionsPage() {
             {form.scope === 'ITEM' ? (
               <div className="sm:col-span-2">
                 <FormField
-                  label="Item"
+                  label="Product"
                   required
                   error={errors.target_id}
-                  hint="Search the catalog, then pick the item this discount applies to"
+                  hint="Search the catalog, then pick the product this discount applies to"
                 >
                   <div className="space-y-2">
                     <input
@@ -615,8 +615,8 @@ export default function PromotionsPage() {
                       type="search"
                       value={itemSearch}
                       onChange={(event) => setItemSearch(event.target.value)}
-                      placeholder="Search items by name or code..."
-                      aria-label="Search items"
+                      placeholder="Search products by name or code..."
+                      aria-label="Search products"
                     />
                     <select
                       className="input"
@@ -624,7 +624,7 @@ export default function PromotionsPage() {
                       value={form.target_id}
                       onChange={setField('target_id')}
                     >
-                      <option value="">Select an item</option>
+                      <option value="">Select a product</option>
                       {items.map((item) => (
                         <option key={item.id} value={item.id}>
                           {item.name}

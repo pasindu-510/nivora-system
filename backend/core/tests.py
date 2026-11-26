@@ -1104,7 +1104,7 @@ class ItemDeleteProtectionTests(APITestCase):
     """Deleting an item with sale history returns 400 with a clear message."""
 
     DETAIL_MESSAGE = (
-        'This item has sale or purchase history and cannot be deleted. '
+        'This product has sale or purchase history and cannot be deleted. '
         'Deactivate it instead.'
     )
 
@@ -3756,3 +3756,83 @@ class BackdatingTests(_StockEntryBase):
             self.assertEqual(self.biz.backdate_limit_days, value)
         res = self.client.patch(url, {'backdate_limit_days': -1}, format='json')
         self.assertEqual(res.status_code, 400)
+
+
+class PlanSettingsTests(APITestCase):
+    def setUp(self):
+        self.biz = _make_business('Plan Shop')
+        self.admin = _make_user('plan-admin', 'business_admin', self.biz)
+        self.client.force_authenticate(self.admin)
+
+    def _set(self, **fields):
+        for key, value in fields.items():
+            setattr(self.biz, key, value)
+        self.biz.save()
+        self.admin.refresh_from_db()
+        self.client.force_authenticate(self.admin)
+
+    def test_catalog_limits(self):
+        self._set(max_categories=1, max_brands=1, max_items=1)
+        other = _make_business('Other Plan Shop')
+        Category.objects.create(business=other, name='Not counted')
+        for url, first, second in (
+            ('/api/categories/', {'name': 'A'}, {'name': 'B'}),
+            ('/api/brands/', {'name': 'A'}, {'name': 'B'}),
+            ('/api/items/', {'code': 'P1', 'name': 'A', 'selling_price': '1'},
+             {'code': 'P2', 'name': 'B', 'selling_price': '1'}),
+        ):
+            res = self.client.post(url, first, format='json')
+            self.assertEqual(res.status_code, 201, res.data)
+            res = self.client.post(url, second, format='json')
+            self.assertEqual(res.status_code, 400, url)
+            self.assertIn('limit reached (1)', str(res.data['detail']))
+        self._set(max_items=None)
+        res = self.client.post(
+            '/api/items/', {'code': 'P2', 'name': 'B', 'selling_price': '1'},
+            format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+
+    def test_product_images_can_be_turned_off(self):
+        self.assertTrue(self.client.get('/api/auth/me/').data[
+            'business_item_images_enabled'])
+        self._set(item_images_enabled=False)
+        self.assertFalse(self.client.get('/api/auth/me/').data[
+            'business_item_images_enabled'])
+        gif = (b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04'
+               b'\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01'
+               b'\x00;')
+        res = self.client.post('/api/items/', {
+            'code': 'IMG', 'name': 'A', 'selling_price': '1',
+            'image': SimpleUploadedFile('a.gif', gif, content_type='image/gif'),
+        }, format='multipart')
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('turned off', str(res.data['image']))
+        res = self.client.post(
+            '/api/items/', {'code': 'IMG', 'name': 'A', 'selling_price': '1'},
+            format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+
+    def test_super_admin_sets_limits(self):
+        root = User.objects.create_user(
+            username='plan-root', password='testpass1234', role='super_admin')
+        self.client.force_authenticate(root)
+        url = f'/api/admin/businesses/{self.biz.id}/'
+        res = self.client.patch(url, {
+            'max_categories': 5, 'max_brands': None, 'max_items': 100,
+            'item_images_enabled': False}, format='json')
+        self.assertEqual(res.status_code, 200, res.data)
+        self.biz.refresh_from_db()
+        self.assertEqual(
+            (self.biz.max_categories, self.biz.max_brands, self.biz.max_items,
+             self.biz.item_images_enabled), (5, None, 100, False))
+        self.assertEqual(
+            self.client.patch(url, {'max_items': 0}, format='json').status_code, 400)
+
+    def test_optional_contact_fields_accept_blank(self):
+        res = self.client.post('/api/suppliers/', {
+            'name': 'S', 'contact_person': '', 'phone': '', 'email': '',
+            'address': ''}, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        res = self.client.post('/api/customers/', {
+            'name': 'C', 'phone': '', 'nic': '', 'address': ''}, format='json')
+        self.assertEqual(res.status_code, 201, res.data)

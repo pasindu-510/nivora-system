@@ -26,6 +26,8 @@ class CategoryViewSet(TenantModelViewSet):
 
     queryset = Category.objects.select_related('business', 'parent').all()
     serializer_class = CategorySerializer
+    limit_field = 'max_categories'
+    limit_label = 'Category'
     search_fields = ['name']
     ordering_fields = ['name', 'created_at']
 
@@ -40,6 +42,8 @@ class BrandViewSet(TenantModelViewSet):
 
     queryset = Brand.objects.select_related('business').all()
     serializer_class = BrandSerializer
+    limit_field = 'max_brands'
+    limit_label = 'Brand'
     search_fields = ['name']
     ordering_fields = ['name', 'created_at']
 
@@ -56,8 +60,10 @@ class ItemViewSet(TenantModelViewSet):
     timestamps.  Managers may write; every business role may read.
     """
 
+    limit_field = 'max_items'
+    limit_label = 'Product'
     protected_delete_message = (
-        'This item has sale or purchase history and cannot be deleted. '
+        'This product has sale or purchase history and cannot be deleted. '
         'Deactivate it instead.'
     )
     queryset = Item.objects.select_related(

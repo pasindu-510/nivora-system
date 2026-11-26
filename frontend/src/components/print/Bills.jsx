@@ -287,7 +287,7 @@ export function SaleInvoiceBill({ sale }) {
         <thead>
           <tr className="border-y border-slate-900 text-[9px] font-semibold uppercase tracking-wide text-slate-600">
             <th className="w-8 py-1.5 pr-2">#</th>
-            <th className="py-1.5 pr-2">Item</th>
+            <th className="py-1.5 pr-2">Product</th>
             <th className="w-14 py-1.5 pr-2 text-right">Qty</th>
             <th className="w-32 py-1.5 pr-2 text-right">Unit price</th>
             <th className="w-32 py-1.5 text-right">Total</th>

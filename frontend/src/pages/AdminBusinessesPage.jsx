@@ -21,9 +21,23 @@ const EMPTY_FORM = {
   cashier_discount_cap: '',
   max_users: '',
   max_branches: '',
+  max_categories: '',
+  max_brands: '',
+  max_items: '',
+  item_images_enabled: true,
   backdate_unlimited: false,
   backdate_limit_days: '0',
 };
+
+/** Optional per-business caps; blank means unlimited. */
+const LIMIT_KEYS = ['max_users', 'max_branches', 'max_categories', 'max_brands', 'max_items'];
+const CATALOG_LIMITS = [
+  ['max_categories', 'Max categories'],
+  ['max_brands', 'Max brands'],
+  ['max_items', 'Max products'],
+];
+
+const limitValue = (raw) => (raw.trim() === '' ? null : Number(raw));
 
 /** Client-side validation before hitting the API. */
 function validateBusiness(values) {
@@ -37,7 +51,7 @@ function validateBusiness(values) {
   if (!Number.isFinite(discountCap) || discountCap < 0) {
     errors.cashier_discount_cap = 'Enter a number of 0 or more.';
   }
-  ['max_users', 'max_branches'].forEach((key) => {
+  LIMIT_KEYS.forEach((key) => {
     const raw = (values[key] ?? '').trim();
     if (raw === '') return; // blank = unlimited
     const limit = Number(raw);
@@ -65,6 +79,10 @@ function buildPayload(values) {
       values.cashier_discount_cap === '' ? 0 : Number(values.cashier_discount_cap),
     max_users: values.max_users.trim() === '' ? null : Number(values.max_users),
     max_branches: values.max_branches.trim() === '' ? null : Number(values.max_branches),
+    max_categories: limitValue(values.max_categories),
+    max_brands: limitValue(values.max_brands),
+    max_items: limitValue(values.max_items),
+    item_images_enabled: values.item_images_enabled,
     backdate_limit_days: values.backdate_unlimited ? null : Number(values.backdate_limit_days),
   };
 }
@@ -185,6 +203,34 @@ function BusinessFormFields({ form, errors, onChange }) {
           placeholder="Unlimited"
         />
       </FormField>
+      {CATALOG_LIMITS.map(([key, label]) => (
+        <FormField
+          key={key}
+          label={label}
+          error={errors[key]}
+          hint="Leave blank for unlimited."
+        >
+          <input
+            className="input"
+            name={key}
+            aria-label={label}
+            inputMode="numeric"
+            value={form[key]}
+            onChange={onChange(key)}
+            placeholder="Unlimited"
+          />
+        </FormField>
+      ))}
+      <FormField label="Product images" hint="When off, staff cannot add or see product images.">
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={form.item_images_enabled}
+            onChange={onChange('item_images_enabled')}
+          />
+          Allow product images
+        </label>
+      </FormField>
       <FormField
         label="Back-date limit (days)"
         error={errors.backdate_limit_days}
@@ -289,6 +335,10 @@ export default function AdminBusinessesPage() {
         row.max_branches !== null && row.max_branches !== undefined
           ? String(row.max_branches)
           : '',
+      max_categories: row.max_categories != null ? String(row.max_categories) : '',
+      max_brands: row.max_brands != null ? String(row.max_brands) : '',
+      max_items: row.max_items != null ? String(row.max_items) : '',
+      item_images_enabled: row.item_images_enabled !== false,
       backdate_unlimited: row.backdate_limit_days === null,
       backdate_limit_days: String(row.backdate_limit_days ?? 0),
     });
@@ -369,7 +419,7 @@ export default function AdminBusinessesPage() {
       header: 'Discount cap',
       render: (row) => `${row.cashier_discount_cap}%`,
     },
-    { key: 'item_count', header: 'Items', render: (row) => row.item_count ?? 0 },
+    { key: 'item_count', header: 'Products', render: (row) => row.item_count ?? 0 },
     {
       key: 'user_count',
       header: 'Users',
@@ -615,7 +665,7 @@ export default function AdminBusinessesPage() {
             </div>
 
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <StatCard label="Items" value={detailRow.item_count ?? 0} />
+              <StatCard label="Products" value={detailRow.item_count ?? 0} />
               <StatCard label="Categories" value={detailRow.category_count ?? 0} />
               <StatCard label="Brands" value={detailRow.brand_count ?? 0} />
               <StatCard label="Branches" value={detailRow.branch_count ?? 0} />
@@ -638,6 +688,14 @@ export default function AdminBusinessesPage() {
                   {detailRow.max_branches != null && detailRow.max_branches !== undefined
                     ? detailRow.max_branches
                     : 'Unlimited'}
+                </p>
+                {CATALOG_LIMITS.map(([key, label]) => (
+                  <p key={key} className="text-sm text-slate-700">
+                    {label}: {detailRow[key] ?? 'Unlimited'}
+                  </p>
+                ))}
+                <p className="text-sm text-slate-700">
+                  Product images: {detailRow.item_images_enabled ? 'On' : 'Off'}
                 </p>
                 <p className="text-sm text-slate-700">
                   Back-dating:{' '}

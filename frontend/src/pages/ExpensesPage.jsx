@@ -188,7 +188,7 @@ export default function ExpensesPage() {
       expense_date: form.expense_date || undefined,
       branch: form.branch ? Number(form.branch) : null,
       cash_account: form.cash_account ? Number(form.cash_account) : null,
-      ...(editing ? { note: form.note.trim() || null } : {}),
+      ...(editing ? { note: form.note.trim() } : {}),
     };
 
     try {

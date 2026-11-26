@@ -81,6 +81,10 @@ class Business(models.Model):
     # null/blank means unlimited.
     max_users = models.PositiveIntegerField(null=True, blank=True)
     max_branches = models.PositiveIntegerField(null=True, blank=True)
+    max_categories = models.PositiveIntegerField(null=True, blank=True)
+    max_brands = models.PositiveIntegerField(null=True, blank=True)
+    max_items = models.PositiveIntegerField(null=True, blank=True)
+    item_images_enabled = models.BooleanField(default=True)
     # How far back stock, sales and installment payments may be dated.
     # 0 = back-dating off, null = unlimited. Set by the super admin.
     backdate_limit_days = models.PositiveIntegerField(null=True, blank=True, default=0)
