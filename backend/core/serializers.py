@@ -9,6 +9,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.db import transaction
 from django.urls import reverse
+from django.utils.dateparse import parse_date
 from rest_framework import serializers
 
 from . import services
@@ -61,6 +62,24 @@ from .models import (
 def _cents(n):
     """Quantize a numeric to 2 decimal places."""
     return Decimal(n).quantize(Decimal('0.01'))
+
+
+def _past_date(user, value, field):
+    """Resolve a user-supplied entry date; ``None`` means "now".
+
+    Back-dating is manager+ and limited per business.
+    """
+    try:
+        day = services.check_entry_date(user.business, value)
+    except ValueError as exc:
+        raise serializers.ValidationError({field: str(exc)})
+    if day is not None and user.role not in (
+        RoleConstants.BUSINESS_ADMIN, RoleConstants.MANAGER,
+    ):
+        raise serializers.ValidationError(
+            {field: 'Only managers and admins can use a past date.'}
+        )
+    return day
 
 
 def _request_business(serializer):
@@ -157,7 +176,13 @@ class ItemListSerializer(TenantModelSerializer):
         request = self.context.get('request')
         if request and getattr(request, 'user', None) and request.user.is_authenticated:
             business = request.user.business
-        self._rows_cache = services.active_discount_rows(business)
+        # ``?price_date=`` previews prices for a back-dated sale.
+        raw = request.query_params.get('price_date') if request else None
+        try:
+            on_date = parse_date(raw) if raw else None
+        except ValueError:
+            on_date = None
+        self._rows_cache = services.active_discount_rows(business, on_date)
         return self._rows_cache
 
     def get_discount_percent(self, obj):
@@ -173,21 +198,32 @@ class ItemListSerializer(TenantModelSerializer):
         return str(price)
 
     def get_branch_stock(self, obj):
-        """Aggregate per-branch remaining quantities from FIFO lots.
+        """Aggregate per-branch remaining quantities and costs from FIFO lots.
+
+        ``next_cost`` is the unit cost the next sale at that branch will use and
+        ``stock_value`` the cost of what is left (both hidden from cashiers).
 
         Uses the prefetched ``lots``/``branch`` caches on the item
         queryset (see ``ItemViewSet``) so list responses stay N+1-free.
         """
         totals = {}
-        for lot in obj.lots.all():
+        # FIFO order, so the first lot with stock gives next_cost.
+        for lot in sorted(obj.lots.all(), key=lambda row: (row.received_at, row.id)):
+            if lot.quantity_remaining <= 0:
+                continue
             if lot.branch_id not in totals:
                 totals[lot.branch_id] = {
                     'branch_id': lot.branch_id,
                     'branch_name': lot.branch.name,
                     'quantity': 0,
+                    'next_cost': str(lot.unit_cost),
+                    'stock_value': Decimal('0.00'),
                 }
             totals[lot.branch_id]['quantity'] += lot.quantity_remaining
-        rows = [row for row in totals.values() if row['quantity'] > 0]
+            totals[lot.branch_id]['stock_value'] += lot.quantity_remaining * lot.unit_cost
+        rows = list(totals.values())
+        for row in rows:
+            row['stock_value'] = str(_cents(row['stock_value']))
         # Branch.Meta.ordering = ['name'] keeps lot iteration name-sorted,
         # but sort explicitly so aggregation order never leaks through.
         rows.sort(key=lambda row: row['branch_name'])
@@ -199,6 +235,9 @@ class ItemListSerializer(TenantModelSerializer):
         if request and getattr(request, 'user', None) and request.user.is_authenticated:
             if request.user.role == RoleConstants.CASHIER:
                 data.pop('cost_price', None)
+                for row in data.get('branch_stock', []):
+                    row.pop('next_cost', None)
+                    row.pop('stock_value', None)
         return data
 
 
@@ -478,6 +517,10 @@ class SaleDetailSerializer(SaleListSerializer):
 class SaleLineSerializer(serializers.Serializer):
     item = serializers.PrimaryKeyRelatedField(queryset=Item.objects.none())
     quantity = serializers.IntegerField(min_value=1)
+    # Back-dated sales only: the price charged at the time.
+    unit_price = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, min_value=Decimal('0')
+    )
 
 
 class SaleCreateSerializer(serializers.Serializer):
@@ -512,6 +555,7 @@ class SaleCreateSerializer(serializers.Serializer):
     cash_account = serializers.PrimaryKeyRelatedField(
         queryset=CashAccount.objects.none(), required=False, allow_null=True
     )
+    sale_date = serializers.DateField(required=False, allow_null=True)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -539,6 +583,15 @@ class SaleCreateSerializer(serializers.Serializer):
         if request and getattr(request, 'user', None) and request.user.is_authenticated:
             business = getattr(request.user, 'business', None)
             if business is not None:
+                attrs['sale_date'] = _past_date(
+                    request.user, attrs.get('sale_date'), 'sale_date'
+                )
+                if attrs['sale_date'] is None and any(
+                    'unit_price' in line for line in attrs.get('lines', [])
+                ):
+                    raise serializers.ValidationError(
+                        {'detail': 'Unit prices can only be set on a back-dated sale.'}
+                    )
                 max_installments = business.max_installments
                 number_of_installments = attrs.get('number_of_installments', 0)
                 # Only enforce limit for installment sales (not single payment)
@@ -556,8 +609,11 @@ class SaleCreateSerializer(serializers.Serializer):
     def create(self, validated_data):
         request = self.context['request']
         user = request.user
-        lines = [{'item': l['item'], 'quantity': l['quantity']}
-                 for l in validated_data['lines']]
+        lines = [
+            {'item': l['item'], 'quantity': l['quantity'],
+             'unit_price': l.get('unit_price')}
+            for l in validated_data['lines']
+        ]
         # Cashiers may only give spot discounts up to the business cap (B-18).
         max_discount_percent = (
             user.business.cashier_discount_cap
@@ -591,6 +647,7 @@ class SaleCreateSerializer(serializers.Serializer):
                 'installment_interval_days', 30
             ),
             cash_account=validated_data.get('cash_account'),
+            sale_date=validated_data.get('sale_date'),
         )
         return sale
 
@@ -604,6 +661,7 @@ class InstallmentPaymentSerializer(serializers.Serializer):
     cash_account = serializers.PrimaryKeyRelatedField(
         queryset=CashAccount.objects.none(), required=False, allow_null=True
     )
+    payment_date = serializers.DateField(required=False, allow_null=True)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -613,6 +671,11 @@ class InstallmentPaymentSerializer(serializers.Serializer):
             if business is not None:
                 self.fields['installment'].queryset = Installment.objects.for_business(business)
                 self.fields['cash_account'].queryset = CashAccount.objects.for_business(business)
+
+    def validate(self, attrs):
+        user = self.context['request'].user
+        attrs['payment_date'] = _past_date(user, attrs.get('payment_date'), 'payment_date')
+        return attrs
 
     @transaction.atomic
     def create(self, validated_data):
@@ -626,6 +689,7 @@ class InstallmentPaymentSerializer(serializers.Serializer):
                 method=validated_data.get('method', Payment.CASH),
                 cash_account=validated_data.get('cash_account'),
                 received_by=user,
+                payment_date=validated_data.get('payment_date'),
             )
         except ValueError as exc:
             raise serializers.ValidationError({'detail': str(exc)})
@@ -672,7 +736,7 @@ class PurchaseListSerializer(serializers.ModelSerializer):
         model = Purchase
         fields = [
             'id', 'order_no', 'supplier', 'supplier_name', 'status',
-            'expected_delivery_date', 'total', 'created_at',
+            'expected_delivery_date', 'purchase_date', 'total', 'created_at',
         ]
 
     def get_total(self, obj):
@@ -721,6 +785,79 @@ class PurchaseReceiptCreateSerializer(serializers.Serializer):
 
     quantities = serializers.DictField(required=False, allow_empty=True)
     note = serializers.CharField(required=False, allow_blank=True)
+
+
+# ── Stock in ────────────────────────────────────────────────────────────────
+
+class StockInLineSerializer(serializers.Serializer):
+    item = serializers.PrimaryKeyRelatedField(queryset=Item.objects.none())
+    quantity = serializers.IntegerField(min_value=1, max_value=1_000_000)
+    unit_cost = serializers.DecimalField(
+        max_digits=12, decimal_places=2, min_value=Decimal('0')
+    )
+    selling_price = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True,
+        min_value=Decimal('0'),
+    )
+
+
+class StockInSerializer(serializers.Serializer):
+    """Payload for one-step stock entry (:func:`services.record_stock_in`)."""
+
+    source = serializers.ChoiceField(choices=[StockLot.PURCHASE, StockLot.OPENING])
+    branch = serializers.PrimaryKeyRelatedField(queryset=Branch.objects.none())
+    supplier = serializers.PrimaryKeyRelatedField(
+        queryset=Supplier.objects.none(), required=False, allow_null=True
+    )
+    lines = StockInLineSerializer(many=True, allow_empty=False)
+    paid_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, default=Decimal('0'),
+        min_value=Decimal('0'),
+    )
+    cash_account = serializers.PrimaryKeyRelatedField(
+        queryset=CashAccount.objects.none(), required=False, allow_null=True
+    )
+    received_date = serializers.DateField(required=False, allow_null=True)
+    note = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        business = _request_business(self)
+        if business is None:
+            return
+        self.fields['branch'].queryset = Branch.objects.for_business(business)
+        self.fields['supplier'].queryset = Supplier.objects.for_business(business)
+        self.fields['cash_account'].queryset = CashAccount.objects.for_business(business)
+        self.fields['lines'].child.fields['item'].queryset = (
+            Item.objects.for_business(business)
+        )
+
+    def validate(self, attrs):
+        user = self.context['request'].user
+        attrs['received_date'] = _past_date(
+            user, attrs.get('received_date'), 'received_date'
+        )
+        if attrs['source'] == StockLot.PURCHASE:
+            if not attrs.get('supplier'):
+                raise serializers.ValidationError({'supplier': 'Choose a supplier.'})
+            if attrs['paid_amount'] > 0 and not attrs.get('cash_account'):
+                raise serializers.ValidationError(
+                    {'cash_account': 'Choose the account the money was paid from.'}
+                )
+        elif attrs['paid_amount'] > 0 or attrs.get('supplier'):
+            raise serializers.ValidationError(
+                {'detail': 'Opening stock has no supplier or payment.'}
+            )
+        return attrs
+
+    def create(self, validated_data):
+        user = self.context['request'].user
+        try:
+            return services.record_stock_in(
+                business=user.business, created_by=user, **validated_data
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError({'detail': str(exc)})
 
 
 # ── Expenses / bookkeeping (spec 6) ─────────────────────────────────────────
@@ -829,6 +966,10 @@ class BusinessSerializer(serializers.ModelSerializer):
     max_branches = serializers.IntegerField(
         required=False, allow_null=True, min_value=1
     )
+    # 0 = back-dating off, null = unlimited.
+    backdate_limit_days = serializers.IntegerField(
+        required=False, allow_null=True, min_value=0, max_value=36500
+    )
     item_count = serializers.IntegerField(read_only=True, default=0)
     category_count = serializers.IntegerField(read_only=True, default=0)
     brand_count = serializers.IntegerField(read_only=True, default=0)
@@ -840,7 +981,7 @@ class BusinessSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'address', 'phone', 'email', 'logo',
             'is_active', 'tax_rate', 'cashier_discount_cap',
-            'max_users', 'max_branches',
+            'max_users', 'max_branches', 'backdate_limit_days',
             'item_count', 'category_count', 'brand_count',
             'branch_count', 'user_count',
             'created_at', 'updated_at',
@@ -861,6 +1002,7 @@ class UserSerializer(serializers.ModelSerializer):
     business_installment_interest_rate = serializers.SerializerMethodField()
     business_name = serializers.SerializerMethodField()
     business_logo = serializers.SerializerMethodField()
+    business_backdate_limit_days = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -868,6 +1010,7 @@ class UserSerializer(serializers.ModelSerializer):
             'id', 'username', 'full_name', 'phone', 'role',
             'business', 'branch', 'is_active', 'email', 'business_tax_rate',
             'business_installment_interest_rate', 'business_name', 'business_logo',
+            'business_backdate_limit_days',
         ]
 
     def get_business_tax_rate(self, obj):
@@ -877,6 +1020,11 @@ class UserSerializer(serializers.ModelSerializer):
     def get_business_installment_interest_rate(self, obj):
         business = getattr(obj, 'business', None)
         return str(business.installment_interest_rate) if business is not None else '0'
+
+    def get_business_backdate_limit_days(self, obj):
+        # null means unlimited; users without a business get 0 (off).
+        business = getattr(obj, 'business', None)
+        return business.backdate_limit_days if business is not None else 0
 
     def get_business_name(self, obj):
         business = getattr(obj, 'business', None)

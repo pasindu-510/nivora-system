@@ -12,7 +12,7 @@ from collections import OrderedDict
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from django.db.models import Count, F, Sum
+from django.db.models import Count, F, Q, Sum
 from django.db.models.functions import TruncDay, TruncMonth
 from django.utils import timezone
 from rest_framework import status
@@ -230,7 +230,8 @@ def _supplier_payables(business, as_of=None):
 
     received_value = Decimal(0)
     for purchase in purchases:
-        if as_of is not None and purchase.created_at.date() > as_of:
+        bought_on = purchase.purchase_date or purchase.created_at.date()
+        if as_of is not None and bought_on > as_of:
             continue
         received_value += received_value_of(purchase)
 
@@ -269,7 +270,7 @@ class BalanceSheetReportView(APIView):
         cash = sum(account_balances(business).values(), Decimal(0))
         inventory = (
             StockLot.objects.filter(
-                business=business, created_at__date__lte=as_of
+                business=business, received_at__date__lte=as_of
             ).aggregate(total=Sum(F('quantity_remaining') * F('unit_cost')))['total']
             or Decimal(0)
         )
@@ -479,9 +480,15 @@ class TaxReportView(APIView):
         if from_date or to_date:
             purchase_qs = Purchase.objects.filter(business=business)
             if from_date:
-                purchase_qs = purchase_qs.filter(created_at__date__gte=from_date)
+                purchase_qs = purchase_qs.filter(
+                    Q(purchase_date__gte=from_date)
+                    | Q(purchase_date__isnull=True, created_at__date__gte=from_date)
+                )
             if to_date:
-                purchase_qs = purchase_qs.filter(created_at__date__lte=to_date)
+                purchase_qs = purchase_qs.filter(
+                    Q(purchase_date__lte=to_date)
+                    | Q(purchase_date__isnull=True, created_at__date__lte=to_date)
+                )
             received_lines = received_lines.filter(purchase__in=purchase_qs)
         purchase_value = received_lines.aggregate(
             total=Sum(F('unit_cost') * F('received_quantity'))

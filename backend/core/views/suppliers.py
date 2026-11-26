@@ -76,6 +76,7 @@ class SupplierViewSet(TenantModelViewSet):
                 'order_no': purchase.order_no,
                 'status': purchase.status,
                 'expected_delivery_date': purchase.expected_delivery_date,
+                'purchase_date': purchase.purchase_date,
                 'total': _cents(line_total),
                 'received_value': received_value,
                 'created_at': purchase.created_at,

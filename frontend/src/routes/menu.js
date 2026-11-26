@@ -38,6 +38,7 @@ export const menuGroups = [
   {
     label: 'Stock',
     items: [
+      { label: 'Stock In', to: '/stock/in', icon: 'box', roles: ADMIN_MANAGER },
       { label: 'Purchase Orders', to: '/stock/purchases', icon: 'clipboard', roles: ADMIN_MANAGER },
       { label: 'Receive Delivery', to: '/stock/receive', icon: 'download', roles: ADMIN_MANAGER },
       { label: 'Cost Lots (FIFO)', to: '/stock/lots', icon: 'layers', roles: ADMIN_MANAGER },

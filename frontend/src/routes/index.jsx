@@ -16,6 +16,7 @@ import CategoriesPage from '../pages/CategoriesPage.jsx';
 import BrandsPage from '../pages/BrandsPage.jsx';
 import StockPurchasesPage from '../pages/StockPurchasesPage.jsx';
 import StockReceivePage from '../pages/StockReceivePage.jsx';
+import StockInPage from '../pages/StockInPage.jsx';
 import StockLotsPage from '../pages/StockLotsPage.jsx';
 import StockMovementsPage from '../pages/StockMovementsPage.jsx';
 import SuppliersPage from '../pages/SuppliersPage.jsx';
@@ -91,6 +92,7 @@ export default function AppRoutes() {
         <Route path="/brands" element={guarded(ADMIN_MANAGER, <BrandsPage />)} />
 
         {/* Stock — admin/manager */}
+        <Route path="/stock/in" element={guarded(ADMIN_MANAGER, <StockInPage />)} />
         <Route path="/stock/purchases" element={guarded(ADMIN_MANAGER, <StockPurchasesPage />)} />
         <Route path="/stock/receive" element={guarded(ADMIN_MANAGER, <StockReceivePage />)} />
         <Route path="/stock/lots" element={guarded(ADMIN_MANAGER, <StockLotsPage />)} />

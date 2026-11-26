@@ -1,4 +1,6 @@
 """Catalog endpoints: categories, brands, items (spec 6.3)."""
+from decimal import Decimal, InvalidOperation
+
 from django.db import transaction
 from django.db.models import F
 from django_filters.rest_framework import DjangoFilterBackend
@@ -90,7 +92,8 @@ class ItemViewSet(TenantModelViewSet):
     def adjust(self, request, pk=None):
         """Manually correct stock for an item (manager+).
 
-        Payload: ``{"quantity": -3, "note": "damaged", "branch": 1}``.
+        Payload: ``{"quantity": -3, "note": "damaged", "branch": 1}``. A positive
+        adjustment may give ``unit_cost``; it defaults to the item's last cost.
         A positive quantity opens an ADJUSTMENT FIFO lot; either sign records
         the matching audit movement, so the correction stays traceable.
         """
@@ -108,6 +111,20 @@ class ItemViewSet(TenantModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         reason = request.data.get('note', '')
+
+        unit_cost = item.cost_price
+        raw_cost = request.data.get('unit_cost')
+        if quantity > 0 and raw_cost not in (None, ''):
+            try:
+                unit_cost = Decimal(str(raw_cost)).quantize(Decimal('0.01'))
+                valid = Decimal(0) <= unit_cost < Decimal('10000000000')
+            except InvalidOperation:
+                valid = False
+            if not valid:
+                return Response(
+                    {'unit_cost': 'Enter a cost of 0 or more.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         # StockLot.branch and StockMovement.branch are NOT NULL, and stock is
         # tracked per branch, so an adjustment must name one explicitly.
@@ -131,7 +148,7 @@ class ItemViewSet(TenantModelViewSet):
                 item=item,
                 quantity_total=quantity,
                 quantity_remaining=quantity,
-                unit_cost=item.cost_price,
+                unit_cost=unit_cost,
                 source=StockLot.ADJUSTMENT,
                 reference=reason,
             )

@@ -213,7 +213,7 @@ export default function SupplierPaymentsPage() {
   const purchaseColumns = [
     { key: 'order_no', header: 'Order', cellClassName: 'font-mono font-semibold', render: (row) => row.order_no },
     { key: 'status', header: 'Status', render: (row) => STATUS_LABELS[row.status] || row.status },
-    { key: 'created_at', header: 'Created', render: (row) => formatDate(row.created_at) },
+    { key: 'created_at', header: 'Created', render: (row) => formatDate(row.purchase_date || row.created_at) },
     { key: 'total', header: 'Order total', align: 'right', render: (row) => formatLKR(row.total) },
     { key: 'received_value', header: 'Received value', align: 'right', render: (row) => formatLKR(row.received_value) },
   ];

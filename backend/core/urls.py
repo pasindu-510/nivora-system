@@ -20,6 +20,7 @@ Full API map (spec section 6):
     POST  /api/purchases/{id}/place/          DRAFT -> ORDERED
     POST  /api/purchases/{id}/receive/        receive stock (creates lots)
     POST  /api/purchases/{id}/cancel/         cancel (if not received)
+    POST  /api/stock-ins/             one-step stock entry (manager+)
     GET   /api/stock-lots/            FIFO lot registry (manager+)
     GET   /api/stock-movements/       stock audit trail (manager+)
     POST  /api/items/{id}/adjust/     manual stock adjustment (manager+)
@@ -84,7 +85,7 @@ from .views.reports import (
     TaxReportView,
 )
 from .views.sales import PaymentViewSet, SaleViewSet
-from .views.stock import StockLotViewSet, StockMovementViewSet
+from .views.stock import StockInView, StockLotViewSet, StockMovementViewSet
 from .views.suppliers import PurchaseViewSet, SupplierViewSet
 from .views.users import BusinessUserViewSet
 from .views.business_logo import BusinessLogoView
@@ -134,6 +135,7 @@ report_urlpatterns = [
 
 urlpatterns = [
     path('health/', HealthView.as_view(), name='health'),
+    path('stock-ins/', StockInView.as_view(), name='stock-in'),
     path('auth/', include(auth_urlpatterns)),
     path('reports/', include(report_urlpatterns)),
     path('dashboard/', DashboardView.as_view(), name='dashboard'),

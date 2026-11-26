@@ -25,6 +25,7 @@ export const routeAccess = {
 
   '/categories': ADMIN_MANAGER,
   '/brands': ADMIN_MANAGER,
+  '/stock/in': ADMIN_MANAGER,
   '/stock/purchases': ADMIN_MANAGER,
   '/stock/receive': ADMIN_MANAGER,
   '/stock/lots': ADMIN_MANAGER,

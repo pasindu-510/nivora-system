@@ -6,13 +6,15 @@ model boundaries:
 * :func:`record_sale` — price computation, FIFO cost allocation,
   stock decrement, installment generation, payment recording.
 * :func:`record_purchase_receipt` — stock-in, FIFO lot creation.
+* :func:`record_stock_in` — one-step stock entry (purchase or opening stock).
+* :func:`check_entry_date` — the per-business back-date limit.
 * :func:`record_installment_payment` — installment/payment bookkeeping.
 * :func:`next_sequence_number` — ``INV-`` / ``PO-`` / ``RCP-`` numbering.
 * :func:`apply_seasonal_discount` — seasonal discount resolution.
 
 All mutating functions run inside ``transaction.atomic``.
 """
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from decimal import ROUND_DOWN, Decimal
 
 from django.db import IntegrityError, transaction
@@ -24,9 +26,11 @@ from .models import (
     CashAccount,
     Expense,
     Installment,
+    Item,
     LotAllocation,
     Payment,
     Purchase,
+    PurchaseItem,
     PurchaseReceipt,
     PurchaseReceiptItem,
     Sale,
@@ -38,15 +42,44 @@ from .models import (
 )
 
 
+# ── Back-dating ─────────────────────────────────────────────────────────────
+
+def check_entry_date(business, value):
+    """Validate a user-supplied entry date against the business limit.
+
+    Returns the date when it is in the past, or ``None`` when it is omitted or
+    today (meaning "now"). Raises ``ValueError`` for future or too-old dates.
+    """
+    today = timezone.localdate()
+    if value is None or value == today:
+        return None
+    if value > today:
+        raise ValueError('The date cannot be in the future.')
+    limit = business.backdate_limit_days
+    if limit is None:
+        return value
+    if limit == 0:
+        raise ValueError('Back-dating is not enabled for this business.')
+    earliest = today - timedelta(days=limit)
+    if value < earliest:
+        raise ValueError(f'The earliest date allowed is {earliest.isoformat()}.')
+    return value
+
+
+def start_of_day(day):
+    """Aware datetime at local midnight of ``day``."""
+    return timezone.make_aware(datetime.combine(day, time.min))
+
+
 # ── Number sequencing ───────────────────────────────────────────────────────
 
-def next_sequence_number(business, prefix, model, field='invoice_no'):
+def next_sequence_number(business, prefix, model, field='invoice_no', year=None):
     """Return the next human-facing sequence number for a business.
 
     Rendered as ``{PREFIX}-{year}-{seq:04d}``, the sequence counting
     documents of the same prefix inside the same calendar year.
     """
-    year = timezone.now().year
+    year = year or timezone.now().year
     prefix_base = f'{prefix}-{year}-'
     # Order by length first: plain string ordering puts "…-10000" before
     # "…-9999", which made the sequence repeat after 9999 (B-09).
@@ -86,29 +119,32 @@ def _create_numbered(model, field, make_number, fields, attempts=5):
 
 # ── FIFO engine (spec 5.1) ──────────────────────────────────────────────────
 
-def _available_lots(business, item, branch=None):
+def _available_lots(business, item, branch=None, as_of=None):
     """Return open stock lots for an item ordered FIFO (oldest first).
 
     Rows are locked (``SELECT … FOR UPDATE``) so two concurrent sales cannot
     both consume the last units (B-10). When ``branch`` is given only that
     branch's lots are eligible: stock is physically per branch (B-07).
+    ``as_of`` (a date) excludes stock that arrived after that day.
     """
     qs = StockLot.objects.select_for_update().filter(
         business=business, item=item, quantity_remaining__gt=0,
     )
     if branch is not None:
         qs = qs.filter(branch=branch)
+    if as_of is not None:
+        qs = qs.filter(received_at__lt=start_of_day(as_of + timedelta(days=1)))
     return list(qs.order_by('received_at', 'id'))
 
 
-def allocate_fifo(business, item, quantity, branch=None):
+def allocate_fifo(business, item, quantity, branch=None, as_of=None):
     """Consume ``quantity`` of ``item`` from FIFO lots.
 
     Returns ``(allocations, unit_cost, ok)`` where ``allocations`` is a list
     of ``(lot, qty)`` and ``unit_cost`` is the weighted-average cost of the
     consumed stock. ``ok`` is False when insufficient stock exists.
     """
-    lots = _available_lots(business, item, branch)
+    lots = _available_lots(business, item, branch, as_of)
     remaining = quantity
     allocations = []
     total_cost = Decimal(0)
@@ -134,10 +170,14 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
                 number_of_installments=0,
                 installment_frequency=Sale.MONTHLY,
                 installment_interval_days=30, cash_account=None,
-                max_discount_percent=None):
+                max_discount_percent=None, sale_date=None):
     """Create a sale with items, FIFO costs, installments and payments.
 
-    ``lines`` is a list of ``{'item': Item, 'quantity': int}``.
+    ``lines`` is a list of ``{'item': Item, 'quantity': int}``, optionally
+    with ``unit_price`` (the price charged, for back-dated sales).
+
+    ``sale_date`` is a past date already validated by
+    :func:`check_entry_date`; ``None`` means now.
 
     Pricing (spec 4.4/5.2):
 
@@ -158,6 +198,7 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
 
     subtotal = Decimal(0)
     prepared_lines = []
+    discount_rows = active_discount_rows(business, sale_date)
 
     for line in lines:
         item = line['item']
@@ -165,13 +206,21 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
         if quantity <= 0:
             raise ValueError('Quantity must be positive.')
 
-        unit_price = apply_seasonal_discount(business, item, Decimal(item.selling_price))
+        if line.get('unit_price') is not None:
+            unit_price = Decimal(line['unit_price'])
+        else:
+            unit_price = apply_seasonal_discount(
+                business, item, Decimal(item.selling_price), discount_rows,
+            )
         line_total = unit_price * quantity
         subtotal += line_total
 
-        allocations, fifo_cost, ok = allocate_fifo(business, item, quantity, branch)
+        allocations, fifo_cost, ok = allocate_fifo(
+            business, item, quantity, branch, as_of=sale_date,
+        )
         if not ok:
-            raise ValueError(f'Insufficient stock for {item.code} at {branch.name}.')
+            when = f' on {sale_date.isoformat()}' if sale_date else ''
+            raise ValueError(f'Insufficient stock for {item.code} at {branch.name}{when}.')
         prepared_lines.append({
             'item': item, 'quantity': quantity,
             'unit_price': unit_price, 'line_total': line_total,
@@ -218,8 +267,10 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
         installment_frequency=installment_frequency,
         installment_interval_days=installment_interval_days,
     )
+    year = sale_date.year if sale_date else None
     sale = _create_numbered(
-        Sale, 'invoice_no', lambda: next_sequence_number(business, 'INV', Sale), sale_fields
+        Sale, 'invoice_no',
+        lambda: next_sequence_number(business, 'INV', Sale, year=year), sale_fields
     )
 
     for prep in prepared_lines:
@@ -246,6 +297,7 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
             business=business, branch=branch, item=item,
             type=StockMovement.SALE, quantity=-prep['quantity'],
             reference=sale.invoice_no, created_by=created_by,
+            note=f'Sale back-dated to {sale_date.isoformat()}' if sale_date else '',
         )
 
     # Financials.
@@ -271,7 +323,7 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
             sale,
             remaining=sale.remaining_cost,
             count=number_of_installments,
-            first_due=timezone.localdate(),
+            first_due=sale_date or timezone.localdate(),
             interval_days=installment_interval_days,
         )
         if down > 0:
@@ -282,6 +334,13 @@ def record_sale(*, business, branch, created_by, customer=None, lines,
             )
 
     sale.save(update_fields=['down_payment', 'remaining_cost', 'status'])
+    if sale_date:
+        # created_at is auto_now_add, so it can only be moved with update().
+        # Reports and bills all read it.
+        moment = start_of_day(sale_date)
+        Sale.objects.filter(pk=sale.pk).update(created_at=moment)
+        Payment.objects.filter(sale=sale).update(created_at=moment)
+        sale.created_at = moment
     return sale
 
 
@@ -318,7 +377,7 @@ def _create_installments(sale, *, remaining, count, first_due, interval_days):
 @transaction.atomic
 def record_installment_payment(*, business, installment, amount,
                                method=Payment.CASH, cash_account=None,
-                               received_by=None):
+                               received_by=None, payment_date=None):
     """Record a payment against an installment.
 
     Rules (blueprint section 5.5):
@@ -361,7 +420,9 @@ def record_installment_payment(*, business, installment, amount,
     if amount > sale.remaining_cost:
         raise ValueError('Payment exceeds balance due.')
 
-    today = timezone.localdate()
+    if payment_date and payment_date < timezone.localdate(sale.created_at):
+        raise ValueError('The payment date cannot be before the sale date.')
+    paid_on = payment_date or timezone.localdate()
     remaining = amount
     order = [selected] + [i for i in all_installs if i.pk != selected.pk]
     for inst in order:
@@ -375,7 +436,7 @@ def record_installment_payment(*, business, installment, amount,
         remaining -= take
         if inst.paid_amount >= inst.amount + inst.interest_charged:
             inst.is_paid = True
-            inst.paid_date = today
+            inst.paid_date = paid_on
         inst.save(update_fields=['paid_amount', 'is_paid', 'paid_date'])
 
     interest = Decimal('0.00')
@@ -388,11 +449,15 @@ def record_installment_payment(*, business, installment, amount,
         selected.paid_date = None
         selected.save(update_fields=['interest_charged', 'is_paid', 'paid_date'])
 
-    Payment.objects.create(
+    payment = Payment.objects.create(
         business=business, sale=sale, installment=selected,
         amount=amount, method=method, cash_account=cash_account,
         received_by=received_by,
     )
+    if payment_date:
+        Payment.objects.filter(pk=payment.pk).update(
+            created_at=start_of_day(payment_date)
+        )
 
     sale.remaining_cost = (sale.remaining_cost - amount + interest).quantize(Decimal('0.01'))
     update_fields = ['remaining_cost']
@@ -412,13 +477,14 @@ def record_installment_payment(*, business, installment, amount,
 
 @transaction.atomic
 def record_purchase_receipt(*, business, branch, purchase, received_by=None,
-                            quantities=None, note=''):
+                            quantities=None, note='', received_date=None):
     """Receive stock for a purchase order.
 
     ``quantities`` maps ``PurchaseItem.id -> qty``; when omitted the full
     outstanding amount of each line is received. Creates a
     ``PurchaseReceipt`` with per-line ``PurchaseReceiptItem`` rows and FIFO
-    stock lots, then updates the purchase status.
+    stock lots, then updates the purchase status. ``received_date`` back-dates
+    the lots; ``None`` means now.
     """
     quantities = quantities or {}
     # Serialize concurrent receipts of the same order (B-10).
@@ -461,12 +527,15 @@ def record_purchase_receipt(*, business, branch, purchase, received_by=None,
             quantity_total=qty, quantity_remaining=qty,
             unit_cost=pi.unit_cost, source=StockLot.PURCHASE,
             reference=receipt.receipt_no,
+            received_at=_received_at(received_date),
         )
         StockMovement.objects.create(
             business=business, branch=branch, item=pi.item,
             type=StockMovement.IN, quantity=qty,
             reference=receipt.receipt_no, created_by=received_by,
+            note=_received_note(received_date),
         )
+        update_last_cost(pi.item, pi.unit_cost, received_date)
 
     all_items = list(purchase.items.all())
     if all(pi.received_quantity >= pi.quantity for pi in all_items):
@@ -475,6 +544,102 @@ def record_purchase_receipt(*, business, branch, purchase, received_by=None,
         purchase.status = Purchase.PARTIALLY_RECEIVED
     purchase.save(update_fields=['status'])
 
+    return purchase, receipt
+
+
+# ── Stock in ────────────────────────────────────────────────────────────────
+
+def _received_at(received_date):
+    return start_of_day(received_date) if received_date else timezone.now()
+
+
+def _received_note(received_date):
+    return f'Received {received_date.isoformat()}' if received_date else ''
+
+
+def update_last_cost(item, unit_cost, received_date=None):
+    """Keep ``Item.cost_price`` equal to the most recently *received* cost.
+
+    A back-dated entry must not overwrite the cost of stock that arrived later.
+    """
+    if received_date and StockLot.objects.filter(
+        item=item,
+        source__in=[StockLot.PURCHASE, StockLot.OPENING],
+        received_at__gte=start_of_day(received_date + timedelta(days=1)),
+    ).exists():
+        return
+    Item.objects.filter(pk=item.pk).update(cost_price=unit_cost)
+
+
+@transaction.atomic
+def record_stock_in(*, business, branch, source, lines, created_by,
+                    supplier=None, paid_amount=0, cash_account=None,
+                    note='', received_date=None):
+    """Enter stock in one step.
+
+    ``lines`` is a list of ``{'item', 'quantity', 'unit_cost',
+    'selling_price'?}``. A ``PURCHASE`` creates a purchase order and receives it
+    in full, so supplier payables stay correct; ``OPENING`` only creates lots.
+    Returns ``(purchase, receipt)``, both ``None`` for opening stock.
+    """
+    total = sum((l['quantity'] * l['unit_cost'] for l in lines), Decimal(0))
+    paid_amount = Decimal(paid_amount or 0)
+    purchase = receipt = None
+
+    if source == StockLot.PURCHASE:
+        if paid_amount > total:
+            raise ValueError('The paid amount is more than the total cost.')
+        purchase = _create_numbered(
+            Purchase, 'order_no',
+            lambda: next_sequence_number(business, 'PO', Purchase, 'order_no'),
+            dict(
+                business=business, branch=branch, supplier=supplier,
+                status=Purchase.ORDERED, notes=note, ordered_by=created_by,
+                purchase_date=received_date,
+            ),
+        )
+        for line in lines:
+            PurchaseItem.objects.create(
+                business=business, purchase=purchase, item=line['item'],
+                quantity=line['quantity'], unit_cost=line['unit_cost'],
+                total=line['quantity'] * line['unit_cost'],
+            )
+        purchase, receipt = record_purchase_receipt(
+            business=business, branch=branch, purchase=purchase,
+            received_by=created_by, note=note, received_date=received_date,
+        )
+        if paid_amount > 0:
+            SupplierPayment.objects.create(
+                business=business, supplier=supplier, purchase=purchase,
+                amount=paid_amount, cash_account=cash_account,
+                payment_date=received_date or timezone.localdate(),
+                paid_by=created_by,
+            )
+    else:
+        for line in lines:
+            item, quantity = line['item'], line['quantity']
+            StockLot.objects.create(
+                business=business, branch=branch, item=item,
+                quantity_total=quantity, quantity_remaining=quantity,
+                unit_cost=line['unit_cost'], source=StockLot.OPENING,
+                reference='OPENING', received_at=_received_at(received_date),
+            )
+            Item.objects.filter(pk=item.pk).update(
+                stock_quantity=F('stock_quantity') + quantity
+            )
+            StockMovement.objects.create(
+                business=business, branch=branch, item=item,
+                type=StockMovement.IN, quantity=quantity,
+                reference='OPENING', created_by=created_by,
+                note=' · '.join(filter(None, [_received_note(received_date), note])),
+            )
+            update_last_cost(item, line['unit_cost'], received_date)
+
+    for line in lines:
+        if line.get('selling_price') is not None:
+            Item.objects.filter(pk=line['item'].pk).update(
+                selling_price=line['selling_price']
+            )
     return purchase, receipt
 
 
@@ -494,7 +659,7 @@ def record_expense(*, business, branch, category, description, amount,
 
 # ── Seasonal discounts (spec 4.5) ───────────────────────────────────────────
 
-def active_discount_rows(business):
+def active_discount_rows(business, on_date=None):
     """Return the active seasonal discount rows for a business.
 
     Exposed separately so callers that need the discount for *many* items
@@ -503,7 +668,7 @@ def active_discount_rows(business):
     """
     if business is None:
         return []
-    today = timezone.localdate()
+    today = on_date or timezone.localdate()
     return list(SeasonalDiscount.objects.filter(
         business=business, is_active=True,
         start_date__lte=today, end_date__gte=today,
@@ -533,9 +698,11 @@ def effective_discount_for(business, item):
     return discount_percent_from_rows(active_discount_rows(business), item)
 
 
-def apply_seasonal_discount(business, item, unit_price):
+def apply_seasonal_discount(business, item, unit_price, rows=None):
     """Return unit price after seasonal discount (for invoicing)."""
-    percent, _name = effective_discount_for(business, item)
+    if rows is None:
+        rows = active_discount_rows(business)
+    percent, _name = discount_percent_from_rows(rows, item)
     if percent:
         return (unit_price * (Decimal(1) - percent / Decimal(100))).quantize(Decimal('0.01'))
     return unit_price

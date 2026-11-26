@@ -81,6 +81,9 @@ class Business(models.Model):
     # null/blank means unlimited.
     max_users = models.PositiveIntegerField(null=True, blank=True)
     max_branches = models.PositiveIntegerField(null=True, blank=True)
+    # How far back stock, sales and installment payments may be dated.
+    # 0 = back-dating off, null = unlimited. Set by the super admin.
+    backdate_limit_days = models.PositiveIntegerField(null=True, blank=True, default=0)
     created_by = models.ForeignKey(
         'User', null=True, blank=True,
         on_delete=models.SET_NULL, related_name='created_businesses',
@@ -472,6 +475,8 @@ class Purchase(BusinessModel):
     order_no = models.CharField(max_length=50, unique=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=DRAFT)
     expected_delivery_date = models.DateField(null=True, blank=True)
+    # Set when stock was entered with a past date; otherwise created_at applies.
+    purchase_date = models.DateField(null=True, blank=True)
     notes = models.TextField(blank=True)
     ordered_by = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name='purchases'

@@ -99,6 +99,11 @@ export const stockMovementsApi = {
   create: (itemId, data) => api.post(`/items/${itemId}/adjust/`, data),
 };
 
+export const stockInsApi = {
+  /** POST /api/stock-ins/ — one-step stock entry (manager+) */
+  create: (data) => api.post('/stock-ins/', data),
+};
+
 export const stockLotsApi = {
   /** GET /api/stock-lots/ — qty remaining per cost lot, lot age */
   list: (params) => api.get('/stock-lots/', { params }),
@@ -266,6 +271,7 @@ export default {
   brandsApi,
   itemsApi,
   stockMovementsApi,
+  stockInsApi,
   stockLotsApi,
   suppliersApi,
   purchasesApi,

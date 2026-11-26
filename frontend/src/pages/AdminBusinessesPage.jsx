@@ -21,6 +21,8 @@ const EMPTY_FORM = {
   cashier_discount_cap: '',
   max_users: '',
   max_branches: '',
+  backdate_unlimited: false,
+  backdate_limit_days: '0',
 };
 
 /** Client-side validation before hitting the API. */
@@ -43,6 +45,12 @@ function validateBusiness(values) {
       errors[key] = 'Enter a whole number of 1 or more.';
     }
   });
+  if (!values.backdate_unlimited) {
+    const days = Number(values.backdate_limit_days);
+    if (values.backdate_limit_days.trim() === '' || !Number.isInteger(days) || days < 0) {
+      errors.backdate_limit_days = 'Enter a whole number of 0 or more.';
+    }
+  }
   return errors;
 }
 
@@ -57,6 +65,7 @@ function buildPayload(values) {
       values.cashier_discount_cap === '' ? 0 : Number(values.cashier_discount_cap),
     max_users: values.max_users.trim() === '' ? null : Number(values.max_users),
     max_branches: values.max_branches.trim() === '' ? null : Number(values.max_branches),
+    backdate_limit_days: values.backdate_unlimited ? null : Number(values.backdate_limit_days),
   };
 }
 
@@ -176,6 +185,30 @@ function BusinessFormFields({ form, errors, onChange }) {
           placeholder="Unlimited"
         />
       </FormField>
+      <FormField
+        label="Back-date limit (days)"
+        error={errors.backdate_limit_days}
+        hint="How far back stock, sales and installment payments may be dated. 0 turns it off."
+      >
+        <input
+          className="input"
+          name="backdate_limit_days"
+          aria-label="Back-date limit in days"
+          inputMode="numeric"
+          value={form.backdate_unlimited ? '' : form.backdate_limit_days}
+          onChange={onChange('backdate_limit_days')}
+          disabled={form.backdate_unlimited}
+          placeholder="Unlimited"
+        />
+        <label className="mt-2 flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={form.backdate_unlimited}
+            onChange={onChange('backdate_unlimited')}
+          />
+          Unlimited back-dating
+        </label>
+      </FormField>
     </div>
   );
 }
@@ -256,6 +289,8 @@ export default function AdminBusinessesPage() {
         row.max_branches !== null && row.max_branches !== undefined
           ? String(row.max_branches)
           : '',
+      backdate_unlimited: row.backdate_limit_days === null,
+      backdate_limit_days: String(row.backdate_limit_days ?? 0),
     });
     setErrors({});
     setBanner(null);
@@ -603,6 +638,14 @@ export default function AdminBusinessesPage() {
                   {detailRow.max_branches != null && detailRow.max_branches !== undefined
                     ? detailRow.max_branches
                     : 'Unlimited'}
+                </p>
+                <p className="text-sm text-slate-700">
+                  Back-dating:{' '}
+                  {detailRow.backdate_limit_days === null
+                    ? 'Unlimited'
+                    : detailRow.backdate_limit_days
+                      ? `${detailRow.backdate_limit_days} days`
+                      : 'Off'}
                 </p>
               </div>
             </div>

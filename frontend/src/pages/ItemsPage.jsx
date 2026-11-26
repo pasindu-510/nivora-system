@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { itemsApi, categoriesApi, brandsApi, branchesApi } from '../api/endpoints.js';
+import { itemsApi, categoriesApi, brandsApi } from '../api/endpoints.js';
 import { qk } from '../api/queryKeys.js';
 import { apiErrorMessage } from '../api/client.js';
 import { formatLKR } from '../utils/format.js';
@@ -19,27 +20,19 @@ const EMPTY_FORM = {
   name: '',
   category: '',
   brand: '',
-  cost_price: '',
   selling_price: '',
   low_stock_threshold: '5',
   is_active: true,
-  opening_stock: '',
-  opening_branch: '',
   image: null, // File | null — handed to PhotoUpload, sent multipart when set
 };
 
 const LOOKUP_PARAMS = { page_size: 100 };
 
 /** Client-side validation before hitting the API. */
-function validateItem(values, mode) {
+function validateItem(values) {
   const errors = {};
   if (!values.code.trim()) errors.code = 'Code is required.';
   if (!values.name.trim()) errors.name = 'Name is required.';
-
-  const costRaw = values.cost_price.trim();
-  const cost = costRaw === '' ? NaN : Number(costRaw);
-  if (costRaw === '') errors.cost_price = 'Cost price is required.';
-  else if (!Number.isFinite(cost) || cost < 0) errors.cost_price = 'Enter a number of 0 or more.';
 
   const sellingRaw = values.selling_price.trim();
   const selling = sellingRaw === '' ? NaN : Number(sellingRaw);
@@ -55,15 +48,6 @@ function validateItem(values, mode) {
     }
   }
 
-  // Opening stock is create-only; empty or 0 means "start at zero".
-  if (mode === 'create' && values.opening_stock.trim() !== '') {
-    const opening = Number(values.opening_stock);
-    if (!Number.isFinite(opening) || opening < 0 || !Number.isInteger(opening)) {
-      errors.opening_stock = 'Enter a whole number of 0 or more.';
-    } else if (opening >= 1 && !values.opening_branch) {
-      errors.opening_branch = 'Select the branch that receives this opening stock.';
-    }
-  }
   return errors;
 }
 
@@ -73,25 +57,17 @@ function validateItem(values, mode) {
  * as null in JSON and as '' in FormData — DRF maps '' to None for allow_null
  * fields on html-shaped input.
  */
-function buildPayload(values, mode) {
-  const opening =
-    mode === 'create' && values.opening_stock.trim() !== '' ? Number(values.opening_stock) : 0;
+function buildPayload(values) {
   const base = {
     code: values.code.trim().toUpperCase(),
     name: values.name.trim(),
     category: values.category === '' ? null : Number(values.category),
     brand: values.brand === '' ? null : Number(values.brand),
-    cost_price: Number(values.cost_price),
     selling_price: Number(values.selling_price),
     low_stock_threshold:
       values.low_stock_threshold.trim() === '' ? 5 : Number(values.low_stock_threshold),
     is_active: Boolean(values.is_active),
   };
-  if (opening >= 1) {
-    base.opening_stock = opening;
-    base.opening_branch = Number(values.opening_branch);
-  }
-
   if (!(values.image instanceof File)) return base;
 
   const fd = new FormData();
@@ -162,22 +138,34 @@ function StockCell({ item }) {
   );
 }
 
+/** Per branch: cost of the next unit to be sold, and the value still on hand. */
+function CostCell({ item }) {
+  const rows = Array.isArray(item.branch_stock) ? item.branch_stock : [];
+  if (!rows.length) return <span className="text-slate-400">—</span>;
+  return (
+    <ul className="space-y-0.5 whitespace-nowrap text-xs text-slate-600">
+      {rows.map((entry) => (
+        <li key={entry.branch_id}>
+          {entry.branch_name}:{' '}
+          <span className="font-bold text-slate-900">{formatLKR(entry.next_cost)}</span> · value{' '}
+          {formatLKR(entry.stock_value)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** Shared create/edit form controls (house style: FormField + input). */
 function ItemFormFields({
   form,
   errors,
   onChange,
   onImageChange,
-  mode,
   editing,
   categories,
   brands,
-  activeBranches,
   lookupLoading,
 }) {
-  const openingQty = form.opening_stock.trim() === '' ? 0 : Number(form.opening_stock);
-  const openingNeedsBranch = Number.isFinite(openingQty) && openingQty >= 1;
-
   return (
     <>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -237,19 +225,6 @@ function ItemFormFields({
               </option>
             ))}
           </select>
-        </FormField>
-        <FormField label="Cost price" required error={errors.cost_price}>
-          <input
-            className="input"
-            type="number"
-            step="0.01"
-            min="0"
-            inputMode="decimal"
-            name="cost_price"
-            value={form.cost_price}
-            onChange={onChange('cost_price')}
-            placeholder="0.00"
-          />
         </FormField>
         <FormField label="Selling price" required error={errors.selling_price}>
           <input
@@ -317,53 +292,6 @@ function ItemFormFields({
           />
         </div>
       </div>
-
-      {/* Create-only: seed a real FIFO lot so the item is sellable on day one. */}
-      {mode === 'create' ? (
-        <div className="mt-5 rounded-control border border-slate-200 bg-slate-50/70 p-4">
-          <p className="text-sm font-bold text-slate-900">Opening stock</p>
-          <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <FormField label="Quantity" error={errors.opening_stock}>
-              <input
-                className="input"
-                type="number"
-                step="1"
-                min="0"
-                name="opening_stock"
-                value={form.opening_stock}
-                onChange={onChange('opening_stock')}
-                placeholder="0"
-              />
-            </FormField>
-            <FormField
-              label="Branch"
-              required={openingNeedsBranch}
-              error={errors.opening_branch}
-            >
-              <select
-                className="input"
-                name="opening_branch"
-                value={form.opening_branch}
-                onChange={onChange('opening_branch')}
-                disabled={lookupLoading}
-              >
-                <option value="">
-                  {lookupLoading ? 'Loading branches...' : 'Select branch'}
-                </option>
-                {activeBranches.map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {row.name}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-          </div>
-          <p className="mt-2 text-xs text-slate-500">
-            Opening stock creates a real FIFO cost lot on the selected branch, making the item
-            immediately sellable.
-          </p>
-        </div>
-      ) : null}
     </>
   );
 }
@@ -419,13 +347,6 @@ export default function ItemsPage() {
     queryKey: qk.brands.list(LOOKUP_PARAMS),
     queryFn: async () => (await brandsApi.list(LOOKUP_PARAMS)).data,
   });
-  // Branches are only needed by the create modal's opening-stock picker.
-  const branchesQuery = useQuery({
-    queryKey: qk.branches.list(LOOKUP_PARAMS),
-    queryFn: async () => (await branchesApi.list(LOOKUP_PARAMS)).data,
-    enabled: modalOpen && !editing,
-  });
-
   const createMutation = useApiMutation((data) => itemsApi.create(data), {
     invalidates: [qk.items.root, qk.stock.root],
   });
@@ -440,10 +361,7 @@ export default function ItemsPage() {
   const count = listQuery.data ? listQuery.data.count : rows.length;
   const categories = (categoriesQuery.data && categoriesQuery.data.results) || [];
   const brands = (brandsQuery.data && brandsQuery.data.results) || [];
-  const branches = (branchesQuery.data && branchesQuery.data.results) || [];
-  const activeBranches = branches.filter((row) => row.is_active);
-  const lookupLoading =
-    categoriesQuery.isPending || brandsQuery.isPending || branchesQuery.isPending;
+  const lookupLoading = categoriesQuery.isPending || brandsQuery.isPending;
 
   const hasFilters = Boolean(
     debouncedSearch || categoryFilter || brandFilter || lowStockOnly || activeFilter
@@ -469,13 +387,10 @@ export default function ItemsPage() {
       name: row.name || '',
       category: row.category != null ? String(row.category) : '',
       brand: row.brand != null ? String(row.brand) : '',
-      cost_price: row.cost_price != null ? String(row.cost_price) : '',
       selling_price: row.selling_price != null ? String(row.selling_price) : '',
       low_stock_threshold:
         row.low_stock_threshold != null ? String(row.low_stock_threshold) : '5',
       is_active: Boolean(row.is_active),
-      opening_stock: '',
-      opening_branch: '',
       image: null,
     });
     setErrors({});
@@ -491,13 +406,12 @@ export default function ItemsPage() {
 
   async function handleSubmit(event) {
     event.preventDefault();
-    const mode = editing ? 'edit' : 'create';
-    const clientErrors = validateItem(form, mode);
+    const clientErrors = validateItem(form);
     setErrors(clientErrors);
     setBanner(null);
     if (Object.keys(clientErrors).length) return;
     try {
-      const payload = buildPayload(form, mode);
+      const payload = buildPayload(form);
       if (editing) await editMutation.mutateAsync({ id: editing.id, data: payload });
       else await createMutation.mutateAsync(payload);
       closeModal();
@@ -570,9 +484,14 @@ export default function ItemsPage() {
       : [
           {
             key: 'cost_price',
-            header: 'Cost',
+            header: 'Last cost',
             align: 'right',
             render: (row) => formatLKR(Number(row.cost_price)),
+          },
+          {
+            key: 'fifo',
+            header: 'Next FIFO cost / value',
+            render: (row) => <CostCell item={row} />,
           },
           {
             key: 'actions',
@@ -650,9 +569,14 @@ export default function ItemsPage() {
         }
         actions={
           readOnly ? null : (
-            <button type="button" className="btn-primary" onClick={openCreate}>
-              + New Item
-            </button>
+            <div className="flex gap-2">
+              <Link to="/stock/in" className="btn-secondary">
+                Add stock
+              </Link>
+              <button type="button" className="btn-primary" onClick={openCreate}>
+                + New Item
+              </button>
+            </div>
           )
         }
       />
@@ -762,7 +686,7 @@ export default function ItemsPage() {
         description={
           editing
             ? 'Update pricing, classification, image, and status. Stock changes go through purchases, sales, or stock movements.'
-            : 'Add a catalog item. Optionally seed opening stock on a branch so it sells immediately.'
+            : 'Add a catalog item. Add its quantity and cost afterwards on the Stock In page.'
         }
         size="lg"
         footer={
@@ -801,11 +725,9 @@ export default function ItemsPage() {
             errors={errors}
             onChange={setField}
             onImageChange={(file) => setForm((prev) => ({ ...prev, image: file }))}
-            mode={editing ? 'edit' : 'create'}
             editing={editing}
             categories={categories}
             brands={brands}
-            activeBranches={activeBranches}
             lookupLoading={lookupLoading}
           />
         </form>

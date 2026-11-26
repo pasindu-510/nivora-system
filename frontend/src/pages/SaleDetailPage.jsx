@@ -7,12 +7,13 @@ import { useApiMutation } from '../hooks/useApiMutation.js';
 import { salesApi, cashAccountsApi } from '../api/endpoints.js';
 import { qk } from '../api/queryKeys.js';
 import { apiErrorMessage } from '../api/client.js';
-import { formatLKR, formatDate, formatDateTime } from '../utils/format.js';
+import { formatLKR, formatDate, formatDateTime, toDateInputValue } from '../utils/format.js';
 import downloadElementAsPdf from '../utils/downloadBillPdf.js';
 import { paymentMethodLabel } from '../components/print/Bills.jsx';
 import PageHeader from '../components/PageHeader.jsx';
 import DataTable from '../components/DataTable.jsx';
 import Modal from '../components/Modal.jsx';
+import EntryDateField, { pastDate, useBackdate } from '../components/EntryDateField.jsx';
 import FullPageLoader from '../components/FullPageLoader.jsx';
 import { SaleInvoiceBill } from '../components/print/Bills.jsx';
 import { InstallmentReceiptBill } from '../components/print/Bills.jsx';
@@ -27,6 +28,8 @@ const STATUS_BADGES = {
 export default function SaleDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
+  const { today: todayValue } = useBackdate();
+  const [paymentDate, setPaymentDate] = useState('');
 
   // --- Query: sale detail ---
   const salesQuery = useQuery({
@@ -192,6 +195,7 @@ export default function SaleDetailPage() {
   // --- Open the collect modal for an installment row ---
   const openCollect = (row) => {
     setCollectInstallment(row);
+    setPaymentDate('');
     setCollectForm({
       amount: String(Number(row.amount) + Number(row.interest_charged || 0) - Number(row.paid_amount)),
       method: 'CASH',
@@ -236,6 +240,7 @@ export default function SaleDetailPage() {
         amount,
         method: collectForm.method,
         cash_account: collectForm.cash_account || null,
+        payment_date: pastDate(paymentDate, todayValue),
       });
       closeCollect();
     } catch (error) {
@@ -654,6 +659,14 @@ export default function SaleDetailPage() {
                 {collectBanner}
               </div>
             )}
+
+            <EntryDateField
+              label="Payment date"
+              value={paymentDate}
+              onChange={setPaymentDate}
+              error={collectErrors.payment_date}
+              notBefore={toDateInputValue(sale.created_at)}
+            />
 
             <div>
               <label

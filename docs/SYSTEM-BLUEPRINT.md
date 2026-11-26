@@ -152,7 +152,8 @@ Legend: ✅ allowed, R read-only, — denied (403).
 | branches | R | R | ✅ | — (empty) |
 | categories, brands | R | ✅ | ✅ | — |
 | items list/detail | R (no `cost_price`) | ✅ | ✅ | — |
-| item create/update/delete, stock adjust | — | ✅ | ✅ | — |
+| item create/update/delete, stock adjust, stock-ins | — | ✅ | ✅ | — |
+| back-dating (stock in, sale, installment payment; §5.14) | — | ✅ | ✅ | sets the limit |
 | customers (+history) | ✅ | ✅ | ✅ | — |
 | sales list/detail/create | ✅ (no `fifo_cost`) | ✅ | ✅ | — |
 | pay installment | ✅ | ✅ | ✅ | — |
@@ -203,6 +204,7 @@ Conventions:
 | max_installments | uint | yes | null | null = unlimited; enforced on sale create |
 | max_users | uint | yes | null | null = unlimited; ≥1 if set |
 | max_branches | uint | yes | null | null = unlimited; ≥1 if set |
+| backdate_limit_days | uint | yes | 0 | 0 = back-dating off, null = unlimited, N = up to N days back (§5.14); super_admin only |
 | created_by | FK User | yes | | set null |
 | created_at, updated_at | datetime | | | |
 
@@ -246,7 +248,7 @@ Password rule for API-created users: min 8 chars.
 | name | str(200) | | |
 | category | FK Category, null | | set null |
 | brand | FK Brand, null | | set null |
-| cost_price | decimal(12,2) | 0 | reference cost; used for adjustment lots / opening lot default |
+| cost_price | decimal(12,2) | 0 | **last cost**: updated by stock in and PO receipts (a back-dated entry never overwrites a later one); default for adjustment / opening lots |
 | selling_price | decimal(12,2) | 0 | list price before seasonal discount |
 | stock_quantity | int | 0 | **business-wide cached total** (all branches) |
 | low_stock_threshold | int | 5 | low stock when `stock_quantity <= threshold` |
@@ -339,7 +341,8 @@ and no logic** — legacy/unused. A rewrite may drop them.
 **Purchase (T)** (purchase order): `branch FK (protect)` (receiving branch),
 `supplier FK (protect)`, `order_no str(50) globally unique` (`PO-<year>-<seq4>`),
 `status enum DRAFT|ORDERED|PARTIALLY_RECEIVED|RECEIVED|CANCELLED (DRAFT)`,
-`expected_delivery_date date null`, `notes text`, `ordered_by FK User null`.
+`expected_delivery_date date null`, `purchase_date date null` (set for back-dated stock in;
+reports use it, else `created_at`), `notes text`, `ordered_by FK User null`.
 
 **PurchaseItem (T)**: `purchase FK (cascade)`, `item FK (protect)`, `quantity int`,
 `received_quantity int 0`, `unit_cost decimal`, `total decimal` (= qty × unit_cost).
@@ -417,7 +420,15 @@ Input: branch, optional customer, lines `[{item, quantity>=1}]` (non-empty),
 `discount_type` (default PERCENT), `discount_value` (default 0), optional `tax_rate`
 (null/absent → business.tax_rate), `is_single_payment` (default true),
 `down_payment`, `number_of_installments`, `installment_frequency`,
-`installment_interval_days` (default 30), optional `cash_account`.
+`installment_interval_days` (default 30), optional `cash_account`, optional
+`sale_date` and per-line `unit_price`.
+
+Back-dated sale (`sale_date` before today, manager+, limit §5.14): FIFO uses only lots
+received on or before that date; seasonal discounts are those of that date; a given
+`unit_price` replaces price and discount (rejected on a sale dated today); the first
+due date and invoice year follow the sale date; `Sale.created_at` and the till
+`Payment.created_at` are set to its local midnight. The movement keeps its real entry
+time and notes the back-date. Earlier sales are never re-costed.
 
 Validation before anything is written:
 * `number_of_installments <= business.max_installments` when installment sale and
@@ -486,7 +497,9 @@ Example: 10 000.00 over 3 → 3333.34, 3333.33, 3333.33; due today+30, +60, +90.
 ### 5.5 Paying an installment
 
 Input: sale (URL), `installment` id (must belong to that sale and business),
-`amount >= 0.01`, `method` (CASH default), optional `cash_account`.
+`amount >= 0.01`, `method` (CASH default), optional `cash_account`, optional
+`payment_date` (manager+, limit §5.14, not before the sale date; sets
+`Payment.created_at` and `paid_date`).
 
 ```
 lock sale + its installments (SELECT … FOR UPDATE)
@@ -536,17 +549,25 @@ allocate_fifo(item, qty):
     if not enough: return fail
     avg_unit_cost = round(Σ(take * lot.unit_cost) / qty)
 ```
+Because the average is rounded to cents, `fifo_cost × qty` can differ from the exact lot
+total by a few cents (e.g. 5×100 + 2×120 = 740 is reported as 105.71×7 = 739.97).
 COGS of a sale line = `fifo_cost × quantity`.
 
 ### 5.7 Stock-in paths
 
 | Path | Effect |
 |---|---|
-| **Item create with opening stock** (`opening_stock>=1`, `opening_branch` required, `opening_unit_cost` default `cost_price`) | lot `OPENING` (ref 'OPENING'), `stock_quantity = opening_stock`, movement IN |
+| **Stock in** `POST /stock-ins/`, `source=PURCHASE` | a purchase order is created and fully received (so payables stay right), optional `SupplierPayment` |
+| **Stock in**, `source=OPENING` | lot `OPENING`, `stock_quantity += q`, movement IN; no payable (the balance sheet needs a matching capital entry) |
+| **Item create with opening stock** (API only; the SPA no longer uses it) (`opening_stock>=1`, `opening_branch` required, `opening_unit_cost` default `cost_price`) | lot `OPENING` (ref 'OPENING'), `stock_quantity = opening_stock`, movement IN |
 | **PO receive** (§5.8) | lot `PURCHASE` per line at `PurchaseItem.unit_cost`, branch = PO branch, ref = receipt no; `stock_quantity += q`; movement IN |
-| **Manual adjust** `POST /items/{id}/adjust/ {quantity≠0, branch (required, own business), note}` | qty > 0: lot `ADJUSTMENT` at `item.cost_price`; qty < 0: units are removed FIFO from that branch's lots; 400 if the branch has fewer units; `stock_quantity += qty`; movement ADJUST (ref `ADJ <code>`) |
+| **Manual adjust** `POST /items/{id}/adjust/ {quantity≠0, branch (required, own business), note}` | qty > 0: lot `ADJUSTMENT` at `unit_cost` (optional, ≥0) or `item.cost_price`; qty < 0: units are removed FIFO from that branch's lots; 400 if the branch has fewer units; `stock_quantity += qty`; movement ADJUST (ref `ADJ <code>`) |
 | `Item.stock_quantity` | read-only in the API — changes only through the paths in this table |
 | **Sale cancel** (§5.9) | lot quantities restored; `stock_quantity += qty`; movement ADJUST (+qty) |
+
+Stock in may update `Item.selling_price` (one price per item, not per lot). A past
+`received_date` sets `StockLot.received_at` (so FIFO order follows arrival), the order's
+`purchase_date` and the paid-now `payment_date`.
 
 ### 5.8 Purchase order lifecycle
 
@@ -613,7 +634,15 @@ not counted anywhere.
 
 ### 5.13 Field visibility
 
-* Cashier: `cost_price` removed from item payloads; `fifo_cost` removed from sale lines.
+* Cashier: `cost_price` removed from item payloads (and `next_cost`, `stock_value` from
+  `branch_stock`); `fifo_cost` removed from sale lines.
+
+### 5.14 Back-dating
+
+One rule for `received_date`, `sale_date` and `payment_date`: omitted or today = now;
+future → 400; past requires manager+ and `Business.backdate_limit_days` (0 → 400;
+N → no earlier than today − N; null → any). Changing the limit does not touch
+existing records. Supplier payment and expense dates are not covered by this limit.
 
 ---
 
@@ -633,7 +662,7 @@ except health, login, refresh. Trailing slashes are required. "CRUD" =
 | GET | `/auth/me/` | — | `<User>` |
 
 `<User>` = `{id, username, full_name, phone, role, business, branch, is_active, email,
-business_tax_rate:"15.00", business_installment_interest_rate:"0.00",
+business_tax_rate:"15.00", business_installment_interest_rate:"0.00", business_backdate_limit_days:0,
 business_name, business_logo:"/media/business_logos/x.png"|null}`
 (`business_tax_rate` etc. are `"0"`/null when user has no business).
 
@@ -645,7 +674,12 @@ business_name, business_logo:"/media/business_logos/x.png"|null}`
 | `/categories/` CRUD | read staff; write manager+ | `id,name,parent,created_at`; search name |
 | `/brands/` CRUD | read staff; write manager+ | `id,name,created_at` |
 | `/items/` CRUD | read staff; write manager+ | see below |
-| `POST /items/{id}/adjust/` | manager+ | `{quantity:int≠0, branch:id, note?}` → `{item_id, new_stock}` |
+| `POST /items/{id}/adjust/` | manager+ | `{quantity:int≠0, branch:id, note?, unit_cost?}` → `{item_id, new_stock}` |
+
+`branch_stock` rows are `{branch_id,branch_name,quantity,next_cost*,stock_value*}`
+(`next_cost` = unit cost of the oldest open lot there; `*` hidden from cashiers).
+`GET /items/?price_date=YYYY-MM-DD` computes `effective_price` / `discount_percent`
+for that date (used by back-dated sales).
 
 Item list/detail JSON:
 ```json
@@ -679,9 +713,9 @@ Photo upload uses multipart/form-data. Search `q` on name/phone/nic.
 * `/suppliers/` CRUD — `id,name,contact_person,phone,email,address,is_active,created_at`.
 * `GET /suppliers/{id}/ledger/` →
   `{supplier, purchase_count, total_billed, total_paid, balance,
-    purchases:[{id,order_no,status,expected_delivery_date,total,received_value,created_at}],
+    purchases:[{id,order_no,status,expected_delivery_date,purchase_date,total,received_value,created_at}],
     payments:[<SupplierPayment>]}`.
-* `/purchases/` list → `{id,order_no,supplier,supplier_name,status,expected_delivery_date,total,created_at}`;
+* `/purchases/` list → `{id,order_no,supplier,supplier_name,status,expected_delivery_date,purchase_date,total,created_at}`;
   detail adds `notes, items:[{id,item,item_code,item_name,quantity,received_quantity,unit_cost,total}],
   receipts:[{id,receipt_no,note,received_by,items:[{id,purchase_item,item_code,quantity}],created_at}]`.
   Filters `status,supplier,branch`; search order_no / supplier name.
@@ -695,6 +729,11 @@ Photo upload uses multipart/form-data. Search `q` on name/phone/nic.
   filters `supplier,purchase,cash_account,payment_date`.
 
 ### 6.5 Stock (manager+)
+
+* `POST /stock-ins/` `{source: PURCHASE|OPENING, branch, supplier (PURCHASE only),
+  lines:[{item, quantity>=1, unit_cost>=0, selling_price?}], paid_amount?, cash_account?
+  (required if paid), received_date?, note?}` → 201
+  `{source,purchase,order_no,receipt_no,line_count,total_cost}`; all-or-nothing.
 
 * `GET /stock-lots/` — `id,item,item_code,item_name,branch,quantity_total,quantity_remaining,unit_cost,source,reference,received_at`;
   filters `item,branch,source,item__category`; ordering `received_at,quantity_remaining`.
@@ -736,7 +775,8 @@ branch_address, branch_phone, discount_label ("10.00%" | "LKR 500.00" | "")
 ```
 → 201 sale detail.
 
-`POST /sales/{id}/pay_installment/` `{installment, amount, method?, cash_account?}` → 200 sale detail.
+`POST /sales/{id}/pay_installment/` `{installment, amount, method?, cash_account?, payment_date?}` → 200 sale detail.
+`POST /sales/` also takes `sale_date?` and `lines[].unit_price?` (§5.3).
 `POST /sales/{id}/cancel/` → 200 sale detail (manager+).
 `PUT/PATCH/DELETE /sales/{id}/` return 405 — sales are immutable.
 
@@ -772,6 +812,7 @@ includes overdue (any date ≤ today+days) where not fully settled; ordered due_
 
 `/admin/businesses/` (super_admin) — `GET, POST, PATCH, DELETE`. Fields
 `id,name,address,phone,email,logo,is_active,tax_rate,cashier_discount_cap,max_users,max_branches,
+backdate_limit_days,
 item_count,category_count,brand_count,branch_count,user_count,created_at,updated_at`.
 Create auto-adds "Main Branch".
 
@@ -846,7 +887,8 @@ Role groups: `STAFF` = business_admin, manager, cashier; `ADMIN_MANAGER` = busin
 | `/installments` | STAFF | due & overdue list, quick pay | installments/due, payInstallment |
 | `/installments/pay` | STAFF | find outstanding sale → pay an installment | sales.list/get, payInstallment |
 | `/customers` | STAFF | CRUD, ID photo upload, purchase history drawer | customers.* |
-| `/items` | STAFF (write manager+) | CRUD, opening stock on create, per-branch stock, cost hidden for cashier | items, categories, brands, branches |
+| `/items` | STAFF (write manager+) | product CRUD (no quantities or cost), per-branch stock, last cost, next FIFO cost and stock value (hidden for cashier) | items, categories, brands |
+| `/stock/in` | ADMIN_MANAGER | supplier purchase or opening stock in one step, optional price change, payment and received date | stock-ins, items, suppliers, branches, cash-accounts |
 | `/categories`, `/brands` | ADMIN_MANAGER | CRUD | |
 | `/stock/purchases` | ADMIN_MANAGER | PO create, lines add/remove, place, cancel, receive | purchases.*, suppliers, items, branches |
 | `/stock/receive` | ADMIN_MANAGER | receive deliveries against ordered POs (partial quantities) | purchases.receive |
@@ -943,7 +985,7 @@ admin) or the API — no SPA screen (§12 G-01).
 * `Sale.remaining_cost == Σ (amount + interest_charged − paid_amount)` over its installments.
 * `Sale.remaining_cost >= 0`; `StockLot.quantity_remaining >= 0`.
 * No row of business A is ever readable/writable or referenceable by business B.
-* Cashier responses never contain `cost_price` or `fifo_cost`.
+* Cashier responses never contain `cost_price`, `fifo_cost`, `next_cost` or `stock_value`.
 
 ### 11.3 Acceptance checklist (mirrors `backend/core/tests.py`, 200 tests)
 

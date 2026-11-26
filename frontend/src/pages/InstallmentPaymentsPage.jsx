@@ -11,6 +11,7 @@ import PageHeader from '../components/PageHeader.jsx';
 import DataTable from '../components/DataTable.jsx';
 import Modal from '../components/Modal.jsx';
 import FormField from '../components/FormField.jsx';
+import EntryDateField, { pastDate, useBackdate } from '../components/EntryDateField.jsx';
 
 /* --------------------------- server error parser -------------------------- */
 function parseServerError(error) {
@@ -32,6 +33,8 @@ function parseServerError(error) {
 export default function InstallmentPaymentsPage() {
   useDocumentTitle('Installment Payments');
   const { user } = useAuth();
+  const { today: todayValue } = useBackdate();
+  const [paymentDate, setPaymentDate] = useState('');
 
   // Filter state
   const [customerName, setCustomerName] = useState('');
@@ -116,6 +119,7 @@ export default function InstallmentPaymentsPage() {
 
   function openCollect(sale) {
     setSelectedSale(sale);
+    setPaymentDate('');
     setErrors({});
     setBanner(null);
     setModalOpen(true);
@@ -171,6 +175,7 @@ export default function InstallmentPaymentsPage() {
           amount,
           method: form.method,
           cash_account: form.cash_account || null,
+          payment_date: pastDate(paymentDate, todayValue),
         },
       });
       closeModal();
@@ -500,6 +505,14 @@ export default function InstallmentPaymentsPage() {
                   </p>
                 )}
               </FormField>
+
+              <EntryDateField
+                label="Payment date"
+                value={paymentDate}
+                onChange={setPaymentDate}
+                error={errors.payment_date}
+                notBefore={toDateInputValue(saleDetail.created_at)}
+              />
 
               <FormField label="Method" required error={errors.method}>
                 <select

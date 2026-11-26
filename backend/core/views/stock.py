@@ -1,11 +1,41 @@
-"""Stock endpoints: lots & movements (spec 6.6)."""
+"""Stock endpoints: stock in, lots & movements (spec 6.6)."""
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import filters
+from rest_framework import filters, status
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from ..models import StockLot, StockMovement
 from ..permissions import IsManagerOrAbove
-from ..serializers import StockLotSerializer, StockMovementSerializer
+from ..serializers import (
+    StockInSerializer,
+    StockLotSerializer,
+    StockMovementSerializer,
+)
 from ..viewsets import TenantModelViewSet
+
+
+class StockInView(APIView):
+    """``POST /api/stock-ins/`` — enter stock in one step (manager+)."""
+
+    permission_classes = [IsManagerOrAbove]
+
+    def post(self, request):
+        serializer = StockInSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        purchase, receipt = serializer.save()
+        data = serializer.validated_data
+        total = sum(line['quantity'] * line['unit_cost'] for line in data['lines'])
+        return Response(
+            {
+                'source': data['source'],
+                'purchase': purchase.id if purchase else None,
+                'order_no': purchase.order_no if purchase else None,
+                'receipt_no': receipt.receipt_no if receipt else None,
+                'line_count': len(data['lines']),
+                'total_cost': f'{total:.2f}',
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class StockLotViewSet(TenantModelViewSet):

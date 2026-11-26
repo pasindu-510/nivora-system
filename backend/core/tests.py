@@ -41,6 +41,7 @@ from .models import (
     RoleConstants,
     Sale,
     SaleItem,
+    SeasonalDiscount,
     StockLot,
     StockMovement,
     Supplier,
@@ -850,9 +851,12 @@ class ItemBranchStockTests(APITestCase):
         self.item.stock_quantity = 17
         self.item.save(update_fields=['stock_quantity'])
         self.expected = [
-            {'branch_id': self.branch_alpha.id, 'branch_name': 'Alpha Counter', 'quantity': 9},
-            {'branch_id': self.branch_mid.id, 'branch_name': 'Mid Store', 'quantity': 2},
-            {'branch_id': self.branch_zulu.id, 'branch_name': 'Zulu Depot', 'quantity': 6},
+            {'branch_id': self.branch_alpha.id, 'branch_name': 'Alpha Counter', 'quantity': 9,
+             'next_cost': '100.00', 'stock_value': '900.00'},
+            {'branch_id': self.branch_mid.id, 'branch_name': 'Mid Store', 'quantity': 2,
+             'next_cost': '100.00', 'stock_value': '200.00'},
+            {'branch_id': self.branch_zulu.id, 'branch_name': 'Zulu Depot', 'quantity': 6,
+             'next_cost': '100.00', 'stock_value': '600.00'},
         ]
 
     def test_list_includes_sorted_aggregated_branch_stock(self):
@@ -1045,7 +1049,8 @@ class ItemOpeningStockTests(APITestCase):
         self.assertEqual(movement.created_by_id, self.manager.id)
         self.assertEqual(
             resp.data['branch_stock'],
-            [{'branch_id': self.branch.id, 'branch_name': 'Main', 'quantity': 3}],
+            [{'branch_id': self.branch.id, 'branch_name': 'Main', 'quantity': 3,
+              'next_cost': '80.00', 'stock_value': '240.00'}],
         )
 
     def test_opening_unit_cost_defaults_to_cost_price(self):
@@ -3489,3 +3494,265 @@ class ProtectedDeleteTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('cannot be deleted', resp.data['detail'])
         self.assertTrue(ExpenseCategory.objects.filter(pk=cat.pk).exists())
+
+
+class _StockEntryBase(APITestCase):
+    def setUp(self):
+        self.biz = _make_business('Entry Shop', tax_rate='0')
+        self.branch = _make_branch(self.biz)
+        self.admin = _make_user('entry-admin', 'business_admin', self.biz)
+        self.cashier = _make_user('entry-cashier', 'cashier', self.biz)
+        self.supplier = Supplier.objects.create(business=self.biz, name='Sup')
+        self.account = CashAccount.objects.create(business=self.biz, name='Till')
+        self.item = _make_item(self.biz, 'RC-1', '0', '150', opening=0)
+        self.client.force_authenticate(self.admin)
+        self.today = timezone.localdate()
+
+    def _limit(self, days):
+        self.biz.backdate_limit_days = days
+        self.biz.save(update_fields=['backdate_limit_days'])
+
+    def _ago(self, days):
+        return (self.today - timedelta(days=days)).isoformat()
+
+    def _stock(self, qty, cost, source='OPENING', **extra):
+        body = {
+            'source': source, 'branch': self.branch.id,
+            'lines': [{'item': self.item.id, 'quantity': qty, 'unit_cost': cost}],
+        }
+        if source == 'PURCHASE':
+            body['supplier'] = self.supplier.id
+        body.update(extra)
+        return self.client.post('/api/stock-ins/', body, format='json')
+
+    def _sell(self, qty, **extra):
+        body = {'branch': self.branch.id,
+                'lines': [{'item': self.item.id, 'quantity': qty}]}
+        body.update(extra)
+        return self.client.post('/api/sales/', body, format='json')
+
+
+class StockInTests(_StockEntryBase):
+    def test_purchase_creates_lot_order_payable_and_payment(self):
+        res = self._stock(5, '100', source='PURCHASE', paid_amount='200',
+                          cash_account=self.account.id)
+        self.assertEqual(res.status_code, 201, res.data)
+        purchase = Purchase.objects.get(pk=res.data['purchase'])
+        self.assertEqual(purchase.status, Purchase.RECEIVED)
+        lot = StockLot.objects.get(item=self.item)
+        self.assertEqual((lot.quantity_remaining, lot.unit_cost), (5, Decimal('100')))
+        ledger = self.client.get(f'/api/suppliers/{self.supplier.id}/ledger/').data
+        self.assertEqual(Decimal(str(ledger['balance'])), Decimal('300.00'))
+        self.item.refresh_from_db()
+        self.assertEqual((self.item.stock_quantity, self.item.cost_price),
+                         (5, Decimal('100')))
+
+    def test_opening_stock_has_no_payable_and_can_set_price(self):
+        res = self.client.post('/api/stock-ins/', {
+            'source': 'OPENING', 'branch': self.branch.id,
+            'lines': [{'item': self.item.id, 'quantity': 3, 'unit_cost': '90',
+                       'selling_price': '175'}],
+        }, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertFalse(Purchase.objects.exists())
+        self.item.refresh_from_db()
+        self.assertEqual(
+            (self.item.stock_quantity, self.item.cost_price, self.item.selling_price),
+            (3, Decimal('90'), Decimal('175')),
+        )
+
+    def test_two_batches_give_fifo_cost_and_item_shows_current_cost(self):
+        self._stock(5, '100')
+        self._stock(5, '120')
+        res = self._sell(7)
+        self.assertEqual(res.status_code, 201, res.data)
+        cost = sum(a.quantity * a.unit_cost for a in LotAllocation.objects.filter(
+            sale_item__sale_id=res.data['id']))
+        self.assertEqual(cost, Decimal('740'))
+        row = self.client.get(f'/api/items/{self.item.id}/').data['branch_stock'][0]
+        self.assertEqual((row['quantity'], row['next_cost'], row['stock_value']),
+                         (3, '120.00', '360.00'))
+        self.client.force_authenticate(self.cashier)
+        row = self.client.get(f'/api/items/{self.item.id}/').data['branch_stock'][0]
+        self.assertNotIn('next_cost', row)
+        self.assertNotIn('stock_value', row)
+
+    def test_rejects_cashier_other_tenant_and_overpayment(self):
+        other = _make_business('Other Shop')
+        foreign_item = _make_item(other, 'X-1', '1', '2', opening=0)
+        res = self.client.post('/api/stock-ins/', {
+            'source': 'OPENING', 'branch': self.branch.id, 'lines': [
+                {'item': self.item.id, 'quantity': 1, 'unit_cost': '1'},
+                {'item': foreign_item.id, 'quantity': 1, 'unit_cost': '1'},
+            ]}, format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(
+            self._stock(1, '1', branch=_make_branch(other).id).status_code, 400)
+        res = self._stock(1, '10', source='PURCHASE', paid_amount='50',
+                          cash_account=self.account.id)
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(StockLot.objects.filter(business=self.biz).exists())
+        self.assertFalse(Purchase.objects.exists())
+        self.client.force_authenticate(self.cashier)
+        self.assertEqual(self._stock(1, '1').status_code, 403)
+
+    def test_po_receive_updates_last_cost_and_adjust_takes_unit_cost(self):
+        po = Purchase.objects.create(
+            business=self.biz, branch=self.branch, supplier=self.supplier,
+            order_no='PO-T-1', status=Purchase.ORDERED)
+        PurchaseItem.objects.create(
+            business=self.biz, purchase=po, item=self.item, quantity=2,
+            unit_cost=Decimal('80'), total=Decimal('160'))
+        record_purchase_receipt(business=self.biz, branch=self.branch, purchase=po)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.cost_price, Decimal('80'))
+        url = f'/api/items/{self.item.id}/adjust/'
+        res = self.client.post(url, {
+            'quantity': 1, 'branch': self.branch.id, 'unit_cost': '55'}, format='json')
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertTrue(StockLot.objects.filter(
+            source=StockLot.ADJUSTMENT, unit_cost=Decimal('55')).exists())
+        for bad in ('-1', 'abc', 'NaN'):
+            res = self.client.post(url, {
+                'quantity': 1, 'branch': self.branch.id, 'unit_cost': bad},
+                format='json')
+            self.assertEqual(res.status_code, 400, bad)
+
+
+class BackdatingTests(_StockEntryBase):
+    def test_limit_boundaries(self):
+        self.assertEqual(self.biz.backdate_limit_days, 0)
+        self.assertEqual(
+            self._stock(1, '1', received_date=self._ago(1)).status_code, 400)
+        self.assertEqual(
+            self._stock(1, '1', received_date=self._ago(0)).status_code, 201)
+        self._limit(30)
+        for days, code in ((30, 201), (31, 400), (-1, 400)):
+            res = self._stock(1, '1', received_date=self._ago(days))
+            self.assertEqual(res.status_code, code, days)
+        self._limit(None)
+        self.assertEqual(
+            self._stock(1, '1', received_date=self._ago(900)).status_code, 201)
+
+    def test_backdated_lot_is_used_first_and_keeps_last_cost(self):
+        self._limit(None)
+        self._stock(5, '120')
+        first = self._sell(1)
+        self._stock(5, '100', received_date=self._ago(7))
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.cost_price, Decimal('120'))
+        second = self._sell(1)
+        costs = [SaleItem.objects.get(sale_id=r.data['id']).fifo_cost
+                 for r in (first, second)]
+        self.assertEqual(costs, [Decimal('120'), Decimal('100')])
+
+    def test_backdated_purchase_dates_payable_and_payment(self):
+        self._limit(None)
+        day = self._ago(10)
+        res = self._stock(2, '50', source='PURCHASE', received_date=day,
+                          paid_amount='10', cash_account=self.account.id)
+        purchase = Purchase.objects.get(pk=res.data['purchase'])
+        self.assertEqual(purchase.purchase_date.isoformat(), day)
+        self.assertEqual(SupplierPayment.objects.get().payment_date.isoformat(), day)
+        sheet = self.client.get(f'/api/reports/balance-sheet/?as_of={day}').data
+        self.assertEqual(
+            Decimal(str(sheet['liabilities']['supplier_payables'])), Decimal('90'))
+        self.assertEqual(Decimal(str(sheet['assets']['inventory'])), Decimal('100'))
+        tax = self.client.get(f'/api/reports/tax/?from={day}&to={day}').data
+        self.assertEqual(Decimal(str(tax['purchase_value'])), Decimal('100'))
+
+    def test_backdated_sale(self):
+        self._limit(60)
+        self._stock(2, '100', received_date=self._ago(20))
+        self._stock(5, '120')
+        day = self._ago(10)
+        # Only the 2 units that had arrived by then are available.
+        self.assertEqual(self._sell(3, sale_date=day).status_code, 400)
+        res = self._sell(
+            2, sale_date=day,
+            lines=[{'item': self.item.id, 'quantity': 2, 'unit_price': '140'}],
+            is_single_payment=False, down_payment='80', number_of_installments=2)
+        self.assertEqual(res.status_code, 201, res.data)
+        sale = Sale.objects.get(pk=res.data['id'])
+        self.assertEqual(timezone.localdate(sale.created_at).isoformat(), day)
+        self.assertEqual(sale.total_cost, Decimal('280'))
+        self.assertEqual(
+            timezone.localdate(sale.payments.get().created_at).isoformat(), day)
+        self.assertEqual(
+            sale.installments.order_by('number').first().due_date,
+            self.today + timedelta(days=20))
+        report = self.client.get(f'/api/reports/profit/?from={day}&to={day}').data
+        self.assertEqual(Decimal(str(report['revenue'])), Decimal('280'))
+
+    def test_sale_date_and_price_restrictions(self):
+        self._limit(None)
+        self._stock(5, '100', received_date=self._ago(20))
+        line = [{'item': self.item.id, 'quantity': 1, 'unit_price': '1'}]
+        self.assertEqual(self._sell(1, lines=line).status_code, 400)
+        self.client.force_authenticate(self.cashier)
+        self.assertEqual(self._sell(1, sale_date=self._ago(1)).status_code, 400)
+        self.assertEqual(self._sell(1, lines=line).status_code, 400)
+        self.assertEqual(self._sell(1, sale_date=self._ago(0)).status_code, 201)
+
+    def test_seasonal_discount_follows_sale_date(self):
+        self._limit(None)
+        self._stock(5, '100', received_date=self._ago(20))
+        SeasonalDiscount.objects.create(
+            business=self.biz, name='Past', scope=SeasonalDiscount.ALL,
+            discount_percentage=Decimal('10'),
+            start_date=self.today - timedelta(days=12),
+            end_date=self.today - timedelta(days=8))
+        url = f'/api/items/{self.item.id}/'
+        for query, price in ((f'?price_date={self._ago(10)}', '135.00'),
+                             ('?price_date=2026-13-45', '150.00'), ('', '150.00')):
+            data = self.client.get(url + query).data
+            self.assertEqual(Decimal(data['effective_price']), Decimal(price), query)
+        res = self._sell(1, sale_date=self._ago(10))
+        self.assertEqual(
+            SaleItem.objects.get(sale_id=res.data['id']).unit_price, Decimal('135.00'))
+
+    def test_backdated_installment_payment(self):
+        self._limit(30)
+        self._stock(1, '100', received_date=self._ago(20))
+        res = self._sell(1, sale_date=self._ago(10), is_single_payment=False,
+                         number_of_installments=2)
+        sale = Sale.objects.get(pk=res.data['id'])
+        inst = sale.installments.order_by('number').first()
+        url = f'/api/sales/{sale.id}/pay_installment/'
+
+        def pay(days):
+            return self.client.post(url, {
+                'installment': inst.id, 'amount': '75',
+                'payment_date': self._ago(days)}, format='json')
+
+        for days in (11, 31, -1):
+            self.assertEqual(pay(days).status_code, 400, days)
+        self.client.force_authenticate(self.cashier)
+        self.assertEqual(pay(5).status_code, 400)
+        self.client.force_authenticate(self.admin)
+        res = pay(5)
+        self.assertEqual(res.status_code, 200, res.data)
+        inst.refresh_from_db()
+        self.assertEqual(inst.paid_date.isoformat(), self._ago(5))
+        self.assertEqual(
+            timezone.localdate(sale.payments.get().created_at).isoformat(),
+            self._ago(5))
+
+    def test_only_super_admin_sets_the_limit(self):
+        self.client.patch('/api/finance-settings/',
+                          {'backdate_limit_days': 99}, format='json')
+        self.biz.refresh_from_db()
+        self.assertEqual(self.biz.backdate_limit_days, 0)
+        self.assertEqual(
+            self.client.get('/api/auth/me/').data['business_backdate_limit_days'], 0)
+        root = User.objects.create_user(
+            username='root-bd', password='testpass1234', role='super_admin')
+        self.client.force_authenticate(root)
+        url = f'/api/admin/businesses/{self.biz.id}/'
+        for value in (30, None, 0):
+            res = self.client.patch(url, {'backdate_limit_days': value}, format='json')
+            self.assertEqual(res.status_code, 200, res.data)
+            self.biz.refresh_from_db()
+            self.assertEqual(self.biz.backdate_limit_days, value)
+        res = self.client.patch(url, {'backdate_limit_days': -1}, format='json')
+        self.assertEqual(res.status_code, 400)

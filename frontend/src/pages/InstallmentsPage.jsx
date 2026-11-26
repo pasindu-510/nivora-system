@@ -13,6 +13,7 @@ import PageHeader from '../components/PageHeader.jsx';
 import DataTable from '../components/DataTable.jsx';
 import Modal from '../components/Modal.jsx';
 import FormField from '../components/FormField.jsx';
+import EntryDateField, { pastDate, useBackdate } from '../components/EntryDateField.jsx';
 import StatCard from '../components/StatCard.jsx';
 
 /* ------------------------------ icons ----------------------------------- */
@@ -48,6 +49,8 @@ export default function InstallmentsPage() {
   useDocumentTitle('Installments');
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { today: todayValue } = useBackdate();
+  const [paymentDate, setPaymentDate] = useState('');
 
   const [windowDays, setWindowDays] = useState('7');
   const [modalOpen, setModalOpen] = useState(false);
@@ -97,6 +100,7 @@ export default function InstallmentsPage() {
 
   function openCollect(row) {
     setSelectedRow(row);
+    setPaymentDate('');
     setForm({
       amount: String(row.due_amount),
       method: 'CASH',
@@ -141,6 +145,7 @@ export default function InstallmentsPage() {
           amount,
           method: form.method,
           cash_account: form.cash_account || null,
+          payment_date: pastDate(paymentDate, todayValue),
         },
       });
       closeModal();
@@ -364,6 +369,13 @@ export default function InstallmentsPage() {
                 </p>
               )}
             </FormField>
+
+            <EntryDateField
+              label="Payment date"
+              value={paymentDate}
+              onChange={setPaymentDate}
+              error={errors.payment_date}
+            />
 
             <FormField label="Method" required error={errors.method}>
               <select

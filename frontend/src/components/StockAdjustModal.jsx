@@ -9,11 +9,11 @@ import FormField from './FormField.jsx';
 
 /**
  * Manual stock correction (blueprint G-02) → POST /api/items/<id>/adjust/.
- * "Add" opens a new FIFO lot at the item's cost price (found stock, returns
- * to shelf); "Remove" writes units off the branch's oldest lots (damaged,
+ * "Add" opens a new FIFO lot at the given unit cost, or the item's last cost
+ * (found stock, returns to shelf); "Remove" writes units off the branch's oldest lots (damaged,
  * lost). The server refuses to remove more than the branch holds.
  */
-const EMPTY = { direction: 'remove', quantity: '', note: '' };
+const EMPTY = { direction: 'remove', quantity: '', note: '', unitCost: '' };
 
 export default function StockAdjustModal({ open, onClose, branches }) {
   const [search, setSearch] = useState('');
@@ -72,6 +72,7 @@ export default function StockAdjustModal({ open, onClose, branches }) {
           branch: Number(branchId),
           quantity: form.direction === 'remove' ? -quantity : quantity,
           note: form.note.trim(),
+          unit_cost: form.direction === 'add' && form.unitCost !== '' ? form.unitCost : undefined,
         },
       });
       setDone(
@@ -81,8 +82,8 @@ export default function StockAdjustModal({ open, onClose, branches }) {
       setForm(EMPTY);
     } catch (error) {
       const data = error && error.response && error.response.data;
-      if (data && (data.quantity || data.branch)) {
-        setErrors({ quantity: data.quantity, branch: data.branch });
+      if (data && (data.quantity || data.branch || data.unit_cost)) {
+        setErrors({ quantity: data.quantity, branch: data.branch, unitCost: data.unit_cost });
       } else {
         setBanner(apiErrorMessage(error));
       }
@@ -177,10 +178,23 @@ export default function StockAdjustModal({ open, onClose, branches }) {
             />
           </FormField>
         </div>
-        {form.direction === 'add' && selected ? (
-          <p className="text-xs text-slate-500">
-            Added units are valued at the item&apos;s current cost price for profit calculations.
-          </p>
+        {form.direction === 'add' ? (
+          <FormField
+            label="Unit cost"
+            error={errors.unitCost}
+            hint="Used for profit calculations. Leave blank to use the item's last cost."
+          >
+            <input
+              className="input"
+              aria-label="Unit cost"
+              type="number"
+              min="0"
+              step="0.01"
+              value={form.unitCost}
+              onChange={(event) => setForm((prev) => ({ ...prev, unitCost: event.target.value }))}
+              placeholder={selected ? String(selected.cost_price) : '0.00'}
+            />
+          </FormField>
         ) : null}
       </form>
     </Modal>

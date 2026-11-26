@@ -15,6 +15,7 @@ import { qk } from '../api/queryKeys.js';
 import { apiErrorMessage } from '../api/client.js';
 import { formatLKR } from '../utils/format.js';
 import PageHeader from '../components/PageHeader.jsx';
+import EntryDateField, { pastDate, useBackdate } from '../components/EntryDateField.jsx';
 
 /** Installment frequency choices mirror `Sale.FREQUENCY_CHOICES` on the backend. */
 const FREQUENCY_OPTIONS = [
@@ -71,6 +72,9 @@ export default function NewSalePage() {
   const [installmentIntervalDays, setInstallmentIntervalDays] = useState('30');
   const [cashAccountId, setCashAccountId] = useState('');
   const [formError, setFormError] = useState('');
+  const { today, allowed: canBackdate } = useBackdate();
+  const [saleDate, setSaleDate] = useState('');
+  const backDate = canBackdate ? pastDate(saleDate, today) : undefined;
 
   useDocumentTitle('New Sale');
 
@@ -104,9 +108,11 @@ export default function NewSalePage() {
     queryFn: async () => (await cashAccountsApi.list({ is_active: true })).data,
   });
 
+  // A past sale date prices items with the promotions active on that day.
+  const itemParams = { q: debouncedSearch, is_active: true, price_date: backDate };
   const itemsQuery = useQuery({
-    queryKey: qk.items.list({ q: debouncedSearch, is_active: true }),
-    queryFn: async () => (await itemsApi.list({ q: debouncedSearch, is_active: true })).data,
+    queryKey: qk.items.list(itemParams),
+    queryFn: async () => (await itemsApi.list(itemParams)).data,
   });
 
   // ── Mutation: create sale ─────────────────────────────────────────────────
@@ -205,6 +211,21 @@ export default function NewSalePage() {
     setCart([]);
   }
 
+  // Prices depend on the date, so changing it starts the cart again.
+  function changeSaleDate(value) {
+    setSaleDate(value);
+    clearCart();
+  }
+
+  // Back-dated sales only: record the price actually charged at the time.
+  function changePrice(itemId, value) {
+    setCart((current) =>
+      current.map((line) =>
+        line.id === itemId ? { ...line, price: toNumber(value), customPrice: value } : line,
+      ),
+    );
+  }
+
   // ── Totals (display only; the backend recomputes on save) ────────────────
   // The backend falls back to `business.tax_rate` when a sale omits tax_rate,
   // so an empty field must display that same default, not zero.
@@ -260,7 +281,15 @@ export default function NewSalePage() {
     const payload = {
       branch: Number(branchId),
       customer: customerId ? Number(customerId) : null,
-      lines: cart.map((line) => ({ item: line.id, quantity: line.quantity })),
+      lines: cart.map((line) => ({
+        item: line.id,
+        quantity: line.quantity,
+        unit_price:
+          backDate && line.customPrice !== undefined && line.customPrice !== ''
+            ? line.price
+            : undefined,
+      })),
+      sale_date: backDate,
       discount_type: discountType,
       discount_value: toNumber(discountValue),
       tax_rate: taxRate === '' ? null : toNumber(taxRate),
@@ -376,7 +405,15 @@ export default function NewSalePage() {
                   <p className="mt-1 text-xs text-slate-500">No customer matches “{debouncedCustomerSearch}”.</p>
                 ) : null}
               </div>
+
+              <EntryDateField label="Sale date" value={saleDate} onChange={changeSaleDate} />
             </div>
+            {backDate ? (
+              <p className="mt-3 rounded-control border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Back-dated sale: only stock received by this date can be sold, and reports for that
+                date will change. Changing the date empties the cart.
+              </p>
+            ) : null}
           </section>
 
           <section className="card p-5">
@@ -474,7 +511,21 @@ export default function NewSalePage() {
                           <p className="font-medium text-slate-900">{line.name}</p>
                           <p className="text-xs text-slate-500">{line.code}</p>
                         </td>
-                        <td className="py-2.5 pr-3 text-slate-700">{formatLKR(line.price)}</td>
+                        <td className="py-2.5 pr-3 text-slate-700">
+                          {backDate ? (
+                            <input
+                              className="input w-28 px-2 py-1 text-sm"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={line.customPrice ?? line.price}
+                              onChange={(event) => changePrice(line.id, event.target.value)}
+                              aria-label={`${line.name} unit price`}
+                            />
+                          ) : (
+                            formatLKR(line.price)
+                          )}
+                        </td>
                         <td className="py-2.5 pr-3">
                           <div className="flex items-center gap-1.5">
                             <button

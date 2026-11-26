@@ -460,7 +460,7 @@ export default function StockPurchasesPage() {
     {
       key: 'created_at',
       header: 'Created',
-      render: (row) => formatDate(row.created_at),
+      render: (row) => formatDate(row.purchase_date || row.created_at),
     },
     {
       key: 'actions',
