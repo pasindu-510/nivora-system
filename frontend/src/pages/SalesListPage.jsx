@@ -8,6 +8,7 @@ import { formatLKR, formatDateTime } from '../utils/format.js';
 import useDocumentTitle from '../hooks/useDocumentTitle.js';
 import PageHeader from '../components/PageHeader.jsx';
 import DataTable from '../components/DataTable.jsx';
+import CustomerPicker from '../components/CustomerPicker.jsx';
 
 const LOOKUP_PARAMS = { page_size: 100 };
 
@@ -29,6 +30,7 @@ export default function SalesListPage() {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
+  const [customer, setCustomer] = useState(null);
 
   // Server-side search on invoice no / customer name / phone — ~300ms.
   useEffect(() => {
@@ -41,6 +43,7 @@ export default function SalesListPage() {
     q: debouncedSearch || undefined,
     status: statusFilter || undefined,
     branch: branchFilter || undefined,
+    customer: customer ? customer.id : undefined,
   };
 
   const listQuery = useQuery({
@@ -59,7 +62,7 @@ export default function SalesListPage() {
   const branches = ((branchesQuery.data && branchesQuery.data.results) || []).filter(
     (row) => row.is_active
   );
-  const hasFilters = Boolean(debouncedSearch || statusFilter || branchFilter);
+  const hasFilters = Boolean(debouncedSearch || statusFilter || branchFilter || customer);
 
   const columns = [
     {
@@ -77,7 +80,29 @@ export default function SalesListPage() {
     {
       key: 'customer_name',
       header: 'Customer',
-      render: (row) => row.customer_name || 'Walk-in',
+      render: (row) => (
+        <>
+          {row.customer_name || 'Walk-in'}
+          {row.customer_blacklisted ? (
+            <span className="badge ml-2 bg-rose-50 text-rose-600">Blacklisted</span>
+          ) : null}
+        </>
+      ),
+    },
+    {
+      key: 'guarantors',
+      header: 'Guarantors',
+      render: (row) =>
+        row.guarantors?.length
+          ? row.guarantors.map((person) => (
+              <span key={person.id} className="block whitespace-nowrap">
+                {person.name}
+                {person.is_blacklisted ? (
+                  <span className="badge ml-2 bg-rose-50 text-rose-600">Blacklisted</span>
+                ) : null}
+              </span>
+            ))
+          : '—',
     },
     {
       key: 'branch_name',
@@ -181,6 +206,16 @@ export default function SalesListPage() {
             </option>
           ))}
         </select>
+      </div>
+
+      <div className="max-w-md">
+        <CustomerPicker
+          label="Filter by customer"
+          value={customer}
+          onChange={setCustomer}
+          emptyLabel="All customers"
+          filter
+        />
       </div>
 
       <DataTable

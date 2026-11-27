@@ -153,6 +153,9 @@ export const customersApi = {
   remove: (id) => api.delete(`/customers/${id}/`),
   /** GET /api/customers/<id>/history/ — purchases + outstanding */
   history: (id) => api.get(`/customers/${id}/history/`),
+  /** Manager and above: {reason} */
+  blacklist: (id, data) => api.post(`/customers/${id}/blacklist/`, data),
+  unblacklist: (id) => api.post(`/customers/${id}/unblacklist/`),
 };
 
 /* ---------------------------------- Sales --------------------------------- */

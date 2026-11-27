@@ -31,7 +31,6 @@ export default function InstallmentCalculatorPage() {
 
   const monthlyRate = Number(user?.business_installment_monthly_interest_rate) || 0;
   const minPercent = Number(user?.business_min_down_payment_percent) || 0;
-  const delayRate = Number(user?.business_installment_interest_rate) || 0;
   const guarantors = Number(user?.business_required_guarantors) || 0;
   const maxMonths = user?.business_max_installments ?? null;
 
@@ -65,9 +64,7 @@ export default function InstallmentCalculatorPage() {
   }
 
   const rules = [
-    monthlyRate > 0 ? `Interest ${monthlyRate}% per month` : 'No interest',
     minPercent > 0 ? `Minimum down payment ${minPercent}%` : 'No minimum down payment',
-    delayRate > 0 ? `Delay payment rate ${delayRate}%` : null,
     guarantors > 0 ? `${guarantors} guarantor(s) needed` : null,
     maxMonths !== null ? `Up to ${maxMonths} installments` : null,
   ].filter(Boolean);
@@ -179,9 +176,6 @@ export default function InstallmentCalculatorPage() {
                 {[
                   ['Down payment now', down],
                   ['Balance to finance', balance],
-                  ['Interest', selected.interest],
-                  ['Total to repay in installments', selected.planTotal],
-                  ['Customer pays in all', down + selected.planTotal],
                 ].map(([label, value]) => (
                   <div key={label} className="flex items-center justify-between gap-3">
                     <dt className="text-slate-500">{label}</dt>
@@ -208,10 +202,6 @@ export default function InstallmentCalculatorPage() {
                 <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
                   <th className="px-1 py-2 sm:px-2 font-semibold">Months</th>
                   <th className="px-1 py-2 sm:px-2 text-right font-semibold">Per month</th>
-                  <th className="hidden px-1 py-2 sm:px-2 text-right font-semibold sm:table-cell">
-                    Interest
-                  </th>
-                  <th className="px-1 py-2 sm:px-2 text-right font-semibold">Pays in all</th>
                 </tr>
               </thead>
               <tbody>
@@ -235,12 +225,6 @@ export default function InstallmentCalculatorPage() {
                     </td>
                     <td className="whitespace-nowrap px-1 py-1 text-right sm:px-2 text-slate-900">
                       {amount(row.perInstallment)}
-                    </td>
-                    <td className="hidden whitespace-nowrap px-1 py-1 text-right sm:px-2 text-slate-600 sm:table-cell">
-                      {amount(row.interest)}
-                    </td>
-                    <td className="whitespace-nowrap px-1 py-1 text-right sm:px-2 text-slate-600">
-                      {amount(down + row.planTotal)}
                     </td>
                   </tr>
                 ))}

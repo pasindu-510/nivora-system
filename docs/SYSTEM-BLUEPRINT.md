@@ -289,7 +289,8 @@ FIFO order: `received_at ASC, id ASC`.
 ### 4.6 Customer (T)
 
 `name str(200)`, `phone str(30)`, `nic str(20)` (national ID), `address text`,
-`id_card_photo file null` (`customers/`). Ordering name.
+`id_card_photo file null` (`customers/`), `is_blacklisted bool` (false), `blacklist_reason str(255)`,
+`blacklisted_at datetime null`, `blacklisted_by FK User null`. Ordering name.
 
 ### 4.7 Sales
 
@@ -518,6 +519,11 @@ stored as `Sale.guarantor_1/2` (protected from deletion). A customer with an OPE
 cannot be deleted. `installment_interest_rate` is the **Delay payment rate** in the SPA
 (the one-time short-payment charge of §5.5).
 
+**Blacklist:** a manager or business_admin blacklists a customer by hand, with a reason.
+A blacklisted person cannot be the buyer or a guarantor of a new installment sale (400);
+paying in full and collecting on existing plans still work. A blacklisted customer cannot
+be deleted. The match is by customer record, not by NIC.
+
 ### 5.5 Paying an installment
 
 Input: sale (URL), `installment` id (must belong to that sale and business),
@@ -727,13 +733,21 @@ Delete with sale/purchase history → 400 `{"detail":"This item has sale or purc
 
 ### 6.3 Customers
 
-`/customers/` CRUD (all staff). Fields `id,name,phone,nic,address,id_card_photo,created_at`.
-Photo upload uses multipart/form-data. Search `q` on name/phone/nic.
+`/customers/` CRUD (all staff). Fields `id,name,phone,nic,address,id_card_photo,created_at`
+plus read-only `is_blacklisted,blacklist_reason,blacklisted_at,blacklisted_by_name`.
+Photo upload uses multipart/form-data. Search `q` on name/phone/nic; filter `blacklisted=true|false`.
+
+`POST /customers/{id}/blacklist/` `{reason}` and `POST /customers/{id}/unblacklist/`
+(manager+) → 200 customer.
 
 `GET /customers/{id}/history/` →
 ```json
 { "customer":{…}, "total_sales_count":3, "total_spent":"…",
-  "outstanding":"…", "sales":[<SaleList> × ≤20, newest first] }
+  "outstanding":"…", "sales":[<SaleList> × ≤20, newest first],
+  "total_paid":"…", "cash_sales_count":1, "active_plans":1, "completed_plans":1,
+  "last_purchase_at":"…"|null, "overdue_count":1, "overdue_amount":"…",
+  "next_due":{"date","amount","sale","invoice_no"}|null,
+  "guaranteed_sales":[<SaleList> × ≤20] }
 ```
 (excludes cancelled sales; outstanding = Σ remaining_cost of OPEN sales).
 
@@ -806,7 +820,9 @@ branch_address, branch_phone, discount_label ("10.00%" | "LKR 500.00" | "")
 
 `POST /sales/{id}/pay_installment/` `{installment, amount, method?, cash_account?, payment_date?}` → 200 sale detail.
 `POST /sales/` also takes `sale_date?`, `lines[].unit_price?` (§5.3) and `guarantors?` (§5.4).
-Sale detail adds `monthly_interest_rate`, `plan_interest`, `guarantors[{id,name,phone,nic,address}]`.
+Sale list and detail rows include `customer_nic`, `customer_blacklisted`, `customer_blacklist_reason`
+and `guarantors[{id,name,phone,nic,address,is_blacklisted,blacklist_reason}]`.
+Sale detail adds `monthly_interest_rate`, `plan_interest`.
 `POST /sales/{id}/cancel/` → 200 sale detail (manager+).
 `PUT/PATCH/DELETE /sales/{id}/` return 405 — sales are immutable.
 
@@ -912,12 +928,12 @@ Role groups: `STAFF` = business_admin, manager, cashier; `ADMIN_MANAGER` = busin
 | `/login` | public | username/password; redirects to role landing | auth |
 | `/dashboard` | DASHBOARD_VIEWERS | stat cards, low stock, due installments, branch sales chart | dashboard/summary, branch-sales |
 | `/sales/new` | STAFF | POS: branch select, customer select (walk-in default), item search (shows per-branch stock + seasonal % off), cart, spot discount, tax (pre-filled from `business_tax_rate`), single vs installment (down payment, count, frequency, interval), cash account | branches, customers, cash-accounts, items, sales.create |
-| `/sales` | STAFF | sales list with filters (customer, phone, NIC, dates, paid status, branch) | sales.list |
-| `/sales/:id` | STAFF | sale detail, installments table, pay installment, cancel (manager+), **print / PDF bill** | sales.get/pay/cancel, cash-accounts |
+| `/sales` | STAFF | sales list with guarantors column; search, status, branch and customer filters | sales.list, customers.list |
+| `/sales/:id` | STAFF | sale detail, customer and guarantor cards with blacklist (manager+), installments table, pay installment, cancel (manager+), **print / PDF bill** | sales.get/pay/cancel, cash-accounts |
 | `/installments` | STAFF | due & overdue list, quick pay | installments/due, payInstallment |
 | `/installments/pay` | STAFF | find outstanding sale → pay an installment | sales.list/get, payInstallment |
 | `/installments/calculator` | STAFF | instant monthly quote from total price + down payment, using the business installment rules (monthly plans only, nothing is saved); menu item and screen hidden when `business_installments_enabled` is false. Maths shared with New Sale in `utils/installments.js` | auth/me |
-| `/customers` | STAFF | CRUD, ID photo upload, purchase history drawer | customers.* |
+| `/customers` | STAFF | CRUD, ID photo upload; clicking a customer opens a summary (totals, overdue, next payment, purchases, guaranteed sales); blacklist (manager+), "blacklisted only" filter | customers.* |
 | `/items` | STAFF (write manager+) | product CRUD (no quantities or cost), per-branch stock, last cost, next FIFO cost and stock value (hidden for cashier) | items, categories, brands |
 | `/stock/in` | ADMIN_MANAGER | supplier purchase or opening stock in one step, optional price change, payment and received date | stock-ins, items, suppliers, branches, cash-accounts |
 | `/categories`, `/brands` | ADMIN_MANAGER | CRUD | |

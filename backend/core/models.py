@@ -4,6 +4,7 @@ All business-level models carry a ``business`` FK and inherit
 :class:`BusinessModel`, which adds ``business``, ``created_at`` and
 ``updated_at`` plus a tenant-scoped default manager (``for_business()``).
 """
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils import timezone
@@ -285,6 +286,15 @@ class Customer(BusinessModel):
     # Stored privately (outside public_html) — see core/storage.py, B-24.
     id_card_photo = models.ImageField(
         upload_to='customers/', null=True, blank=True, storage=private_storage
+    )
+    # Set by a manager or owner for bad payers: no new installment sale may
+    # name this person as buyer or guarantor.
+    is_blacklisted = models.BooleanField(default=False)
+    blacklist_reason = models.CharField(max_length=255, blank=True)
+    blacklisted_at = models.DateTimeField(null=True, blank=True)
+    blacklisted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='+',
     )
 
     class Meta:

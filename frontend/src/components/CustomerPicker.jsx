@@ -29,6 +29,8 @@ export default function CustomerPicker({
   required = false,
   emptyLabel = 'Select a customer',
   excludeIds = [],
+  // A list filter: no "new customer" button and no required/optional hint.
+  filter = false,
 }) {
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -85,15 +87,21 @@ export default function CustomerPicker({
       <div className="flex items-center justify-between">
         <span className="label">
           {label}{' '}
-          {required ? (
+          {filter ? null : required ? (
             <span className="text-rose-500">*</span>
           ) : (
             <span className="font-normal text-slate-400">(optional)</span>
           )}
         </span>
-        <button type="button" className="text-xs font-semibold text-brand-600" onClick={openCreate}>
-          + New customer
-        </button>
+        {filter ? null : (
+          <button
+            type="button"
+            className="text-xs font-semibold text-brand-600"
+            onClick={openCreate}
+          >
+            + New customer
+          </button>
+        )}
       </div>
       <input
         type="search"
@@ -119,9 +127,16 @@ export default function CustomerPicker({
             {row.name}
             {row.phone ? ` — ${row.phone}` : ''}
             {row.nic ? ` NIC: ${row.nic}` : ''}
+            {row.is_blacklisted ? ' (BLACKLISTED)' : ''}
           </option>
         ))}
       </select>
+      {value?.is_blacklisted && !filter ? (
+        <p className="mt-1 text-xs font-semibold text-rose-600" role="alert">
+          Blacklisted{value.blacklist_reason ? `: ${value.blacklist_reason}` : ''}. Not allowed on
+          installments.
+        </p>
+      ) : null}
       {query.isFetching ? (
         <p className="mt-1 text-xs text-slate-400">Searching…</p>
       ) : total > found.length ? (

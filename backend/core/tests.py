@@ -3999,3 +3999,94 @@ class InstallmentPlanTests(_StockEntryBase):
         ):
             res = self.client.patch(url, body, format='json')
             self.assertEqual(res.status_code, code, body)
+
+
+class CustomerBlacklistTests(_StockEntryBase):
+    def setUp(self):
+        super().setUp()
+        self.item.selling_price = Decimal('1000')
+        self.item.save(update_fields=['selling_price'])
+        self._stock(20, '500')
+        self.biz.required_guarantors = 1
+        self.biz.save(update_fields=['required_guarantors'])
+        self.admin.refresh_from_db()
+        self.client.force_authenticate(self.admin)
+        self.guarantor = Customer.objects.create(business=self.biz, name='Guarantor')
+        self.manager = _make_user('entry-manager', 'manager', self.biz)
+
+    def _plan(self, **extra):
+        return self._sell(1, is_single_payment=False, down_payment='100',
+                          number_of_installments=3,
+                          guarantors=[self.guarantor.id], **extra)
+
+    def _blacklist(self, person, reason='Not paying'):
+        return self.client.post(f'/api/customers/{person.id}/blacklist/',
+                                {'reason': reason}, format='json')
+
+    def test_manager_blacklists_and_removes_with_a_reason(self):
+        self.client.force_authenticate(self.manager)
+        self.assertEqual(self._blacklist(self.buyer, '  ').status_code, 400)
+        res = self._blacklist(self.buyer)
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(
+            (res.data['is_blacklisted'], res.data['blacklist_reason'],
+             res.data['blacklisted_by_name']),
+            (True, 'Not paying', 'entry-manager'))
+        listed = self.client.get('/api/customers/?blacklisted=true').data
+        self.assertEqual([r['id'] for r in listed['results']], [self.buyer.id])
+        res = self.client.post(f'/api/customers/{self.buyer.id}/unblacklist/')
+        self.assertFalse(res.data['is_blacklisted'])
+        self.assertEqual(res.data['blacklist_reason'], '')
+
+    def test_cashier_cannot_change_or_delete_a_blacklisted_customer_flag(self):
+        self._blacklist(self.buyer)
+        self.client.force_authenticate(self.cashier)
+        url = f'/api/customers/{self.buyer.id}/'
+        self.assertEqual(self._blacklist(self.guarantor).status_code, 403)
+        self.assertEqual(self.client.post(url + 'unblacklist/').status_code, 403)
+        self.client.patch(url, {'is_blacklisted': False}, format='json')
+        self.assertEqual(self.client.delete(url).status_code, 400)
+        self.buyer.refresh_from_db()
+        self.assertTrue(self.buyer.is_blacklisted)
+
+    def test_blacklisted_buyer_or_guarantor_blocks_installments_only(self):
+        self._blacklist(self.buyer)
+        res = self._plan()
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('blacklisted', str(res.data))
+        # Paying in full is still allowed.
+        self.assertEqual(self._sell(1, customer=self.buyer.id).status_code, 201)
+        self.client.post(f'/api/customers/{self.buyer.id}/unblacklist/')
+        self._blacklist(self.guarantor)
+        res = self._plan()
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('guarantors', res.data)
+
+    def test_existing_plan_stays_payable_and_shows_in_history(self):
+        sale = Sale.objects.get(pk=self._plan().data['id'])
+        first = sale.installments.order_by('number').first()
+        first.due_date = self.today - timedelta(days=1)
+        first.save(update_fields=['due_date'])
+        self._blacklist(self.buyer)
+
+        history = self.client.get(f'/api/customers/{self.buyer.id}/history/').data
+        self.assertEqual(history['overdue_count'], 1)
+        self.assertEqual(
+            (history['active_plans'], history['completed_plans'],
+             history['cash_sales_count'], Decimal(str(history['total_paid']))),
+            (1, 0, 0, Decimal('100')))
+        self.assertEqual(history['next_due']['invoice_no'], sale.invoice_no)
+        self.assertIsNotNone(history['last_purchase_at'])
+        self.assertEqual(Decimal(str(history['overdue_amount'])), first.amount)
+        backed = self.client.get(
+            f'/api/customers/{self.guarantor.id}/history/').data
+        self.assertEqual([r['id'] for r in backed['guaranteed_sales']], [sale.id])
+
+        row = self.client.get(f'/api/sales/?customer={self.buyer.id}').data['results'][0]
+        self.assertTrue(row['customer_blacklisted'])
+        self.assertEqual([g['name'] for g in row['guarantors']], ['Guarantor'])
+
+        res = self.client.post(f'/api/sales/{sale.id}/pay_installment/',
+                               {'installment': first.id, 'amount': str(first.amount)},
+                               format='json')
+        self.assertEqual(res.status_code, 200, res.data)

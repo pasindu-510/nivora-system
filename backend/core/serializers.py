@@ -342,13 +342,19 @@ class PrivatePhotoField(serializers.ImageField):
 
 class CustomerSerializer(TenantModelSerializer):
     id_card_photo = PrivatePhotoField(required=False, allow_null=True)
+    blacklisted_by_name = serializers.CharField(
+        source='blacklisted_by.username', read_only=True, default=''
+    )
 
     class Meta:
         model = Customer
         fields = [
             'id', 'name', 'phone', 'nic', 'address', 'id_card_photo',
-            'created_at',
+            'created_at', 'is_blacklisted', 'blacklist_reason',
+            'blacklisted_at', 'blacklisted_by_name',
         ]
+        # Changed only through the blacklist actions (manager and above).
+        read_only_fields = ['is_blacklisted', 'blacklist_reason', 'blacklisted_at']
 
 
 class SupplierSerializer(TenantModelSerializer):
@@ -469,6 +475,14 @@ class SaleListSerializer(serializers.ModelSerializer):
     branch_name = serializers.CharField(source='branch.name', read_only=True, default='')
     created_by_name = serializers.CharField(source='created_by.username', read_only=True, default='')
     is_fully_paid = serializers.SerializerMethodField()
+    customer_nic = serializers.CharField(source='customer.nic', read_only=True, default='')
+    customer_blacklisted = serializers.BooleanField(
+        source='customer.is_blacklisted', read_only=True, default=False
+    )
+    customer_blacklist_reason = serializers.CharField(
+        source='customer.blacklist_reason', read_only=True, default=''
+    )
+    guarantors = serializers.SerializerMethodField()
 
     class Meta:
         model = Sale
@@ -479,7 +493,16 @@ class SaleListSerializer(serializers.ModelSerializer):
             'total_cost', 'down_payment', 'remaining_cost', 'status',
             'is_single_payment', 'number_of_installments', 'installment_frequency',
             'created_by', 'created_by_name', 'created_at',
-            'is_fully_paid',
+            'is_fully_paid', 'customer_nic', 'customer_blacklisted',
+            'customer_blacklist_reason', 'guarantors',
+        ]
+
+    def get_guarantors(self, obj):
+        return [
+            {'id': g.id, 'name': g.name, 'phone': g.phone, 'nic': g.nic,
+             'address': g.address, 'is_blacklisted': g.is_blacklisted,
+             'blacklist_reason': g.blacklist_reason}
+            for g in (obj.guarantor_1, obj.guarantor_2) if g
         ]
 
     def get_is_fully_paid(self, obj):
@@ -499,21 +522,13 @@ class SaleDetailSerializer(SaleListSerializer):
     branch_address = serializers.CharField(source='branch.address', read_only=True, default='')
     branch_phone = serializers.CharField(source='branch.phone', read_only=True, default='')
     discount_label = serializers.SerializerMethodField()
-    guarantors = serializers.SerializerMethodField()
 
     class Meta(SaleListSerializer.Meta):
         fields = SaleListSerializer.Meta.fields + [
             'items', 'installments', 'payments',
             'business_name', 'business_address', 'business_phone',
             'branch_address', 'branch_phone', 'discount_label',
-            'business_logo', 'monthly_interest_rate', 'plan_interest', 'guarantors',
-        ]
-
-    def get_guarantors(self, obj):
-        return [
-            {'id': g.id, 'name': g.name, 'phone': g.phone, 'nic': g.nic,
-             'address': g.address}
-            for g in (obj.guarantor_1, obj.guarantor_2) if g
+            'business_logo', 'monthly_interest_rate', 'plan_interest',
         ]
 
     def get_discount_label(self, obj):
@@ -643,6 +658,15 @@ class SaleCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {'customer': 'An installment sale needs a saved customer.'}
             )
+        if customer.is_blacklisted:
+            raise serializers.ValidationError(
+                {'customer': f'{customer.name} is blacklisted and cannot buy on installments.'}
+            )
+        for person in guarantors:
+            if person.is_blacklisted:
+                raise serializers.ValidationError(
+                    {'guarantors': f'{person.name} is blacklisted and cannot be a guarantor.'}
+                )
         needed = business.required_guarantors
         if len(guarantors) != needed:
             raise serializers.ValidationError(

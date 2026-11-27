@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { useApiMutation } from '../hooks/useApiMutation.js';
 import { salesApi, cashAccountsApi } from '../api/endpoints.js';
 import { qk } from '../api/queryKeys.js';
+import BlacklistControl from '../components/BlacklistControl.jsx';
 import { apiErrorMessage } from '../api/client.js';
 import { formatLKR, formatDate, formatDateTime, toDateInputValue } from '../utils/format.js';
 import downloadElementAsPdf from '../utils/downloadBillPdf.js';
@@ -346,34 +347,41 @@ export default function SaleDetailPage() {
         actions={headerActions}
       />
 
-      {/* --- Customer card --- */}
-      <div className="card rounded-control border border-slate-200 p-4">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
+      {/* --- Customer and guarantors --- */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {[
+          {
+            role: 'Customer',
+            id: sale.customer,
+            name: sale.customer_name || 'Walk-in customer',
+            phone: sale.customer_phone,
+            nic: sale.customer_nic,
+            address: sale.customer_address,
+            is_blacklisted: sale.customer_blacklisted,
+            blacklist_reason: sale.customer_blacklist_reason,
+          },
+          ...(sale.guarantors || []).map((person, index) => ({
+            ...person,
+            role: `Guarantor ${index + 1}`,
+          })),
+        ].map((person) => (
+          <div key={person.role} className="card rounded-control border border-slate-200 p-4">
             <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
-              Customer
+              {person.role}
             </p>
-            <p className="mt-1 font-semibold text-slate-900">
-              {sale.customer_name || 'Walk-in customer'}
-            </p>
+            <p className="mt-1 font-semibold text-slate-900">{person.name}</p>
+            <div className="mt-1 break-words text-sm text-slate-600">
+              {person.phone ? (
+                <a className="block text-brand-600" href={`tel:${person.phone}`}>
+                  {person.phone}
+                </a>
+              ) : null}
+              {person.nic ? <p>NIC: {person.nic}</p> : null}
+              {person.address ? <p>{person.address}</p> : null}
+            </div>
+            {person.id ? <BlacklistControl key={person.id} person={person} /> : null}
           </div>
-          {sale.customer_phone && (
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                Phone
-              </p>
-              <p className="mt-1 text-slate-600">{sale.customer_phone}</p>
-            </div>
-          )}
-          {sale.customer_address && (
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                Address
-              </p>
-              <p className="mt-1 text-slate-600">{sale.customer_address}</p>
-            </div>
-          )}
-        </div>
+        ))}
       </div>
 
       {/* --- Items table --- */}
@@ -519,14 +527,6 @@ export default function SaleDetailPage() {
                   </div>
                 </>
               ) : null}
-              {(sale.guarantors || []).map((person, index) => (
-                <div key={person.id}>
-                  <p className="text-sm font-medium">Guarantor {index + 1}</p>
-                  <p className="mt-1">
-                    {[person.name, person.phone, person.nic].filter(Boolean).join(' · ')}
-                  </p>
-                </div>
-              ))}
             </div>
             <div className="mt-2">
               <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">

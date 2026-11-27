@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { customersApi } from '../api/endpoints.js';
 import { qk } from '../api/queryKeys.js';
 import { apiErrorMessage } from '../api/client.js';
-import { formatLKR, formatDate, formatDateTime, initials } from '../utils/format.js';
+import { formatDate, initials } from '../utils/format.js';
 import useDocumentTitle from '../hooks/useDocumentTitle.js';
 import { useApiMutation } from '../hooks/useApiMutation.js';
 import PageHeader from '../components/PageHeader.jsx';
@@ -12,6 +12,7 @@ import Modal from '../components/Modal.jsx';
 import FormField from '../components/FormField.jsx';
 import PhotoUpload from '../components/PhotoUpload.jsx';
 import Icon from '../components/Icon.jsx';
+import CustomerSummary from '../components/CustomerSummary.jsx';
 
 const EMPTY_FORM = {
   name: '',
@@ -170,6 +171,7 @@ export default function CustomersPage() {
   const [errors, setErrors] = useState({});
   const [banner, setBanner] = useState(null);
   const [actionError, setActionError] = useState(null);
+  const [blacklistedOnly, setBlacklistedOnly] = useState(false);
 
   // Server-side search on name/phone/nic — debounce keystrokes ~300ms.
   useEffect(() => {
@@ -180,18 +182,12 @@ export default function CustomersPage() {
   const listParams = {
     page_size: 100,
     q: debouncedSearch || undefined,
+    blacklisted: blacklistedOnly ? 'true' : undefined,
   };
 
   const listQuery = useQuery({
     queryKey: qk.customers.list(listParams),
     queryFn: async () => (await customersApi.list(listParams)).data,
-  });
-
-  // History query — enabled only when history modal is open
-  const historyQuery = useQuery({
-    queryKey: qk.customers.history(historyTarget?.id),
-    queryFn: async () => (await customersApi.history(historyTarget.id)).data,
-    enabled: Boolean(historyTarget),
   });
 
   const createMutation = useApiMutation((data) => customersApi.create(data), {
@@ -234,8 +230,7 @@ export default function CustomersPage() {
     setModalOpen(true);
   }
 
-  function openHistory(row, event) {
-    event.stopPropagation();
+  function openHistory(row) {
     setHistoryTarget(row);
   }
 
@@ -297,7 +292,14 @@ export default function CustomersPage() {
       key: 'name',
       header: 'Name',
       cellClassName: 'font-semibold text-slate-900',
-      render: (row) => row.name,
+      render: (row) => (
+        <button type="button" className="text-left font-semibold">
+          {row.name}
+          {row.is_blacklisted ? (
+            <span className="badge ml-2 bg-rose-50 text-rose-600">Blacklisted</span>
+          ) : null}
+        </button>
+      ),
     },
     { key: 'phone', header: 'Phone', render: (row) => row.phone || '—' },
     { key: 'nic', header: 'NIC', render: (row) => row.nic || '—' },
@@ -327,11 +329,11 @@ export default function CustomersPage() {
           <button
             type="button"
             className="btn-secondary px-2 py-1.5 text-xs"
-            aria-label={`View history for ${row.name}`}
-            title="History"
-            onClick={(event) => openHistory(row, event)}
+            aria-label={`View summary for ${row.name}`}
+            title="Summary"
+            onClick={() => openHistory(row)}
           >
-            History
+            Summary
           </button>
           <button
             type="button"
@@ -439,6 +441,14 @@ export default function CustomersPage() {
           placeholder="Search by name, phone or NIC..."
           aria-label="Search customers"
         />
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={blacklistedOnly}
+            onChange={(event) => setBlacklistedOnly(event.target.checked)}
+          />
+          Blacklisted only
+        </label>
       </div>
 
       <DataTable
@@ -447,7 +457,7 @@ export default function CustomersPage() {
         rowKey={(row) => row.id}
         loading={listQuery.isPending}
         caption="Customer directory with purchase history"
-        onRowClick={openEdit}
+        onRowClick={openHistory}
         emptyTitle={debouncedSearch ? 'No customers match your search' : 'No customers yet'}
         emptyDescription={
           debouncedSearch
@@ -509,12 +519,12 @@ export default function CustomersPage() {
         </form>
       </Modal>
 
-      {/* History modal — read-only view of customer purchase history */}
+      {/* Customer summary */}
       <Modal
         open={Boolean(historyTarget)}
         onClose={closeHistoryModal}
-        title={`Customer history — ${historyTarget?.name || ''}`}
-        description="Recent sales, total spent, and outstanding balance."
+        title={historyTarget?.name || ''}
+        description="Sales, payments and installment summary."
         size="lg"
         footer={
           <button type="button" className="btn-secondary" onClick={closeHistoryModal}>
@@ -522,107 +532,7 @@ export default function CustomersPage() {
           </button>
         }
       >
-        {historyQuery.isPending ? (
-          <div className="flex items-center justify-center py-8">
-            <div className="animate-spin rounded-full h-6 w-6 border-2 border-brand-600 border-t-transparent" />
-            <span className="sr-only">Loading history...</span>
-          </div>
-        ) : historyQuery.isError ? (
-          <div
-            className="rounded-control border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700"
-            role="alert"
-          >
-            Could not load history — {apiErrorMessage(historyQuery.error)}
-            <button
-              type="button"
-              className="btn-secondary px-2.5 py-1 text-xs ml-3"
-              onClick={() => historyQuery.refetch()}
-            >
-              Retry
-            </button>
-          </div>
-        ) : historyQuery.data ? (
-          <>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 mb-6">
-              <div className="rounded-control border border-slate-200 bg-slate-50/70 p-4">
-                <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Total spent</p>
-                <p className="mt-1 text-2xl font-bold text-slate-900 tabular-nums">
-                  {formatLKR(historyQuery.data.total_spent)}
-                </p>
-              </div>
-              <div className="rounded-control border border-slate-200 bg-slate-50/70 p-4">
-                <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Outstanding</p>
-                <p className="mt-1 text-2xl font-bold text-rose-600 tabular-nums">
-                  {formatLKR(historyQuery.data.outstanding)}
-                </p>
-              </div>
-              <div className="rounded-control border border-slate-200 bg-slate-50/70 p-4">
-                <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Total sales</p>
-                <p className="mt-1 text-2xl font-bold text-slate-900 tabular-nums">
-                  {historyQuery.data.total_sales_count}
-                </p>
-              </div>
-            </div>
-
-            <div className="rounded-control border border-slate-200 overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead className="bg-slate-50/80">
-                  <tr>
-                    <th scope="col" className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 text-left">
-                      Invoice
-                    </th>
-                    <th scope="col" className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 text-left">
-                      Date
-                    </th>
-                    <th scope="col" className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 text-right">
-                      Total
-                    </th>
-                    <th scope="col" className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 text-left">
-                      Status
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {(historyQuery.data.sales || []).slice(0, 20).map((sale) => (
-                    <tr key={sale.id}>
-                      <td className="px-5 py-3.5 text-slate-700 font-mono text-xs font-semibold">
-                        {sale.invoice_no}
-                      </td>
-                      <td className="px-5 py-3.5 text-slate-700">
-                        {formatDateTime(sale.created_at)}
-                      </td>
-                      <td className="px-5 py-3.5 text-slate-700 text-right tabular-nums">
-                        {formatLKR(sale.total_cost)}
-                      </td>
-                      <td className="px-5 py-3.5 text-slate-700">
-                        <span
-                          className={`badge ${
-                            sale.status === 'completed'
-                              ? 'bg-emerald-50 text-emerald-700'
-                              : sale.status === 'pending'
-                              ? 'bg-amber-50 text-amber-700'
-                              : sale.status === 'cancelled'
-                              ? 'bg-rose-50 text-rose-700'
-                              : 'bg-slate-100 text-slate-600'
-                          }`}
-                        >
-                          {sale.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                  {(historyQuery.data.sales || []).length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="px-5 py-8 text-center text-slate-500">
-                        No sales recorded for this customer.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </>
-        ) : null}
+        {historyTarget ? <CustomerSummary customerId={historyTarget.id} /> : null}
       </Modal>
 
       {/* Delete confirm — plain confirm, no history protection on this backend */}
