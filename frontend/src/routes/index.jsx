@@ -11,6 +11,7 @@ import SaleDetailPage from '../pages/SaleDetailPage.jsx';
 import InstallmentsPage from '../pages/InstallmentsPage.jsx';
 import InstallmentPaymentsPage from '../pages/InstallmentPaymentsPage.jsx';
 import InstallmentCalculatorPage from '../pages/InstallmentCalculatorPage.jsx';
+import ActivityLogPage from '../pages/ActivityLogPage.jsx';
 import CustomersPage from '../pages/CustomersPage.jsx';
 import ItemsPage from '../pages/ItemsPage.jsx';
 import CategoriesPage from '../pages/CategoriesPage.jsx';
@@ -114,6 +115,7 @@ export default function AppRoutes() {
         <Route path="/settings/manage-business" element={guarded(BUSINESS_ADMINS, <ManageBusinessPage />)} />
         <Route path="/users" element={guarded(BUSINESS_ADMINS, <UsersPage />)} />
         <Route path="/branches" element={guarded(BUSINESS_ADMINS, <BranchesPage />)} />
+        <Route path="/activity-log" element={guarded(BUSINESS_ADMINS, <ActivityLogPage />)} />
 
         {/* Platform — super admin only */}
         <Route path="/admin/businesses" element={guarded(SUPER_ADMINS, <AdminBusinessesPage />)} />

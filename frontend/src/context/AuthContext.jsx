@@ -52,6 +52,9 @@ export function AuthProvider({ children }) {
       if (!access) {
         throw new Error('Login response did not include an access token.');
       }
+      // An expired session skips logout(), so drop anything cached for the
+      // previous account (possibly another business) before using the new one.
+      queryClient.clear();
       setTokens({ access, refresh });
       setHasToken(true);
       // Resolve the profile before returning so callers (e.g. the login page)

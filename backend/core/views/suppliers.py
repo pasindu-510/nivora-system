@@ -8,7 +8,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from .. import services
-from ..models import Purchase, PurchaseItem, Supplier, SupplierPayment
+from ..activity import log_activity
+from ..models import ActivityLog, Purchase, PurchaseItem, Supplier, SupplierPayment
 from ..permissions import IsManagerOrAbove
 from ..serializers import (
     PurchaseCreateSerializer,
@@ -191,6 +192,11 @@ class PurchaseViewSet(TenantModelViewSet):
                 {'detail': 'Line not found or already partially received.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        log_activity(
+            request.user, ActivityLog.EDIT, 'PURCHASE',
+            record_id=purchase.pk, label=purchase.order_no,
+            details=f'line removed: {line.item.code} x {line.quantity} at {line.unit_cost}',
+        )
         line.delete()
         return Response(PurchaseDetailSerializer(purchase).data)
 
@@ -223,6 +229,11 @@ class PurchaseViewSet(TenantModelViewSet):
             )
         purchase.status = Purchase.CANCELLED
         purchase.save(update_fields=['status'])
+        log_activity(
+            request.user, ActivityLog.CANCEL, 'PURCHASE',
+            record_id=purchase.pk, label=purchase.order_no,
+            details=f'supplier {purchase.supplier.name}',
+        )
         return Response(PurchaseDetailSerializer(purchase).data)
 
     @transaction.atomic

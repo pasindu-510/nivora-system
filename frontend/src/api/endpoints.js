@@ -24,6 +24,14 @@ export const dashboardApi = {
   summary: (params) => api.get('/dashboard/summary/', { params }),
   /** GET /api/dashboard/branch-sales/ — sales per branch for a date range */
   branchSales: (params) => api.get('/dashboard/branch-sales/', { params }),
+  /** GET /api/dashboard/employee-sales/ — sales per seller for a date range */
+  employeeSales: (params) => api.get('/dashboard/employee-sales/', { params }),
+};
+
+/* ------------------------------ Activity log ------------------------------ */
+export const activityLogsApi = {
+  /** GET /api/activity-logs/ — business admin only */
+  list: (params) => api.get('/activity-logs/', { params }),
 };
 
 /* ------------------------------ Installments ------------------------------ */

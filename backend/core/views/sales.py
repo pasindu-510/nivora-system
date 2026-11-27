@@ -6,7 +6,9 @@ from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from ..activity import log_activity
 from ..models import (
+    ActivityLog,
     Installment,
     Item,
     LotAllocation,
@@ -43,7 +45,7 @@ class SaleViewSet(TenantModelViewSet):
     filter_backends = [
         DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter,
     ]
-    filterset_fields = ['status', 'branch', 'customer', 'is_single_payment']
+    filterset_fields = ['status', 'branch', 'customer', 'created_by', 'is_single_payment']
     search_fields = ['invoice_no', 'customer__name', 'customer__phone']
     ordering_fields = ['created_at', 'invoice_no']
     # Sales are immutable financial records: create via POST, change state only
@@ -168,6 +170,15 @@ class SaleViewSet(TenantModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             self._reverse_stock(sale, request.user)
+            log_activity(
+                request.user, ActivityLog.CANCEL, 'SALE',
+                record_id=sale.pk, label=sale.invoice_no,
+                details=(
+                    f'total {sale.total_cost}; balance {sale.remaining_cost}; '
+                    f'customer {sale.customer.name if sale.customer else "walk-in"}; '
+                    f'sold by {sale.created_by.username if sale.created_by else "-"}'
+                ),
+            )
             sale.status = Sale.CANCELLED
             sale.remaining_cost = 0
             sale.save(update_fields=['status', 'remaining_cost'])

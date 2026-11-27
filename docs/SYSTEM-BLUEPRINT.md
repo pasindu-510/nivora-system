@@ -188,6 +188,9 @@ Conventions:
 * `decimal(m,2)` = fixed-point money/percent. `str(n)` = varchar(n).
 * "cascade" / "protect" / "set null" describe ON DELETE behaviour.
 
+**Isolation is tested** in `core/test_tenant_isolation.py`: one business's staff try every
+read, write and foreign id of another's. Add new endpoints and foreign keys to it.
+
 ### 4.1 Business (tenant)
 
 | Field | Type | Null | Default | Notes |
@@ -291,6 +294,15 @@ FIFO order: `received_at ASC, id ASC`.
 `name str(200)`, `phone str(30)`, `nic str(20)` (national ID), `address text`,
 `id_card_photo file null` (`customers/`), `is_blacklisted bool` (false), `blacklist_reason str(255)`,
 `blacklisted_at datetime null`, `blacklisted_by FK User null`. Ordering name.
+
+**ActivityLog (T)** — audit trail: `user FK null`, `username`, `role`, `action` (EDIT, DELETE,
+CANCEL), `record_type` (SALE, PRODUCT, CATEGORY, BRAND, CUSTOMER, SUPPLIER, PURCHASE,
+SUPPLIER_PAYMENT, EXPENSE, RECURRING_EXPENSE, EXPENSE_CATEGORY, CASH_ACCOUNT, CAPITAL_ENTRY,
+PROMOTION, USER, BRANCH, SETTINGS), `record_id null`, `label`, `details`, `created_at`.
+Written by `core/activity.py` in the same transaction as the change, for changes made through
+the business API: record edits and deletes, sale and purchase-order cancellation, purchase line
+removal, stock adjustment, blacklist changes and business settings. Not logged: creations,
+payments, the logo, super-admin and Django admin changes. `username` survives account deletion.
 
 ### 4.7 Sales
 
@@ -751,6 +763,10 @@ Photo upload uses multipart/form-data. Search `q` on name/phone/nic; filter `bla
 ```
 (excludes cancelled sales; outstanding = Σ remaining_cost of OPEN sales).
 
+`GET /activity-logs/` (business_admin only, read-only, newest first) — fields
+`id,created_at,user,username,role,action,record_type,record_id,label,details`;
+filters `action`, `record_type`, `record_id`, search `q`.
+
 ### 6.4 Suppliers & purchases (manager+)
 
 * `/suppliers/` CRUD — `id,name,contact_person,phone,email,address,is_active,created_at`.
@@ -878,6 +894,7 @@ Create auto-adds "Main Branch".
 | `/dashboard/` | — | `{today_sales,month_sales,outstanding,low_stock_count,expense_month}` |
 | `/dashboard/summary/` | — | `{today_sales,low_stock_count,low_stock_items[{id,code,name,stock_quantity}],top_item,due_installments_count,due_installments_list[{id,customer_name,invoice_no,due_amount,due_date}] (≤8),open_sales}` |
 | `/dashboard/branch-sales/` | `start,end` | `[{branch,total}]` (non-zero, desc) |
+| `/dashboard/employee-sales/` | `start,end` | manager+. `[{user_id,username,full_name,role,sales_count,installment_count,total}]`, by `Sale.created_by` (the logged-in user); active users incl. zero, plus inactive sellers; cancelled excluded; total desc. `GET /sales/?created_by=` lists one seller's sales |
 
 Other routes: `/admin/` (Django admin site), `/api/schema/` (OpenAPI), `/api/docs/` (Swagger UI),
 `/media/<path>` (dev fallback file serving).
@@ -926,7 +943,7 @@ Role groups: `STAFF` = business_admin, manager, cashier; `ADMIN_MANAGER` = busin
 | Route | Roles | Screen / behaviour | APIs |
 |---|---|---|---|
 | `/login` | public | username/password; redirects to role landing | auth |
-| `/dashboard` | DASHBOARD_VIEWERS | stat cards, low stock, due installments, branch sales chart | dashboard/summary, branch-sales |
+| `/dashboard` | DASHBOARD_VIEWERS | stat cards, low stock, due installments, branch sales chart, sales by employee (today / this month / last 30 days; row opens that seller's sales) | dashboard/summary, branch-sales, employee-sales |
 | `/sales/new` | STAFF | POS: branch select, customer select (walk-in default), item search (shows per-branch stock + seasonal % off), cart, spot discount, tax (pre-filled from `business_tax_rate`), single vs installment (down payment, count, frequency, interval), cash account | branches, customers, cash-accounts, items, sales.create |
 | `/sales` | STAFF | sales list with guarantors column; search, status, branch and customer filters | sales.list, customers.list |
 | `/sales/:id` | STAFF | sale detail, customer and guarantor cards with blacklist (manager+), installments table, pay installment, cancel (manager+), **print / PDF bill** | sales.get/pay/cancel, cash-accounts |
@@ -950,6 +967,7 @@ Role groups: `STAFF` = business_admin, manager, cashier; `ADMIN_MANAGER` = busin
 | `/settings/manage-business` | BUSINESS_ADMINS | logo upload, finance constants | business/logo, finance-settings |
 | `/users` | BUSINESS_ADMINS | staff CRUD with seat counter | users |
 | `/branches` | BUSINESS_ADMINS | branch CRUD | branches |
+| `/activity-log` | BUSINESS_ADMINS | audit of edits, deletions and cancellations; filters and paging | activity-logs |
 | `/admin/businesses` | SUPER_ADMINS | business CRUD incl. limits, discount cap, counts | admin/businesses |
 | `/admin/users` | SUPER_ADMINS | any-user CRUD | admin/users |
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { salesApi, branchesApi } from '../api/endpoints.js';
 import { qk } from '../api/queryKeys.js';
@@ -31,6 +31,11 @@ export default function SalesListPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
   const [customer, setCustomer] = useState(null);
+  // Set by the dashboard's employee table: ?seller=&name=&from=&to=
+  const [urlParams, setUrlParams] = useSearchParams();
+  const seller = urlParams.get('seller');
+  const sellerFrom = urlParams.get('from');
+  const sellerTo = urlParams.get('to');
 
   // Server-side search on invoice no / customer name / phone — ~300ms.
   useEffect(() => {
@@ -44,6 +49,9 @@ export default function SalesListPage() {
     status: statusFilter || undefined,
     branch: branchFilter || undefined,
     customer: customer ? customer.id : undefined,
+    created_by: seller || undefined,
+    date_from: sellerFrom || undefined,
+    date_to: sellerTo || undefined,
   };
 
   const listQuery = useQuery({
@@ -62,7 +70,7 @@ export default function SalesListPage() {
   const branches = ((branchesQuery.data && branchesQuery.data.results) || []).filter(
     (row) => row.is_active
   );
-  const hasFilters = Boolean(debouncedSearch || statusFilter || branchFilter || customer);
+  const hasFilters = Boolean(debouncedSearch || statusFilter || branchFilter || customer || seller);
 
   const columns = [
     {
@@ -103,6 +111,11 @@ export default function SalesListPage() {
               </span>
             ))
           : '—',
+    },
+    {
+      key: 'created_by_name',
+      header: 'Sold by',
+      render: (row) => row.created_by_name || '—',
     },
     {
       key: 'branch_name',
@@ -207,6 +220,18 @@ export default function SalesListPage() {
           ))}
         </select>
       </div>
+
+      {seller ? (
+        <div className="flex flex-wrap items-center gap-2 text-sm text-slate-700">
+          <span className="badge">
+            Sold by {urlParams.get('name') || 'employee'}
+            {sellerFrom ? ` · ${sellerFrom} to ${sellerTo}` : ''}
+          </span>
+          <button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={() => setUrlParams({})}>
+            Show all sales
+          </button>
+        </div>
+      ) : null}
 
       <div className="max-w-md">
         <CustomerPicker

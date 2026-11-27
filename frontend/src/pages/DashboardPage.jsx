@@ -16,6 +16,7 @@ import useDocumentTitle from '../hooks/useDocumentTitle.js';
 import PageHeader from '../components/PageHeader.jsx';
 import StatCard from '../components/StatCard.jsx';
 import EmptyState from '../components/EmptyState.jsx';
+import EmployeeSales from '../components/EmployeeSales.jsx';
 
 /* --------------------------------- icons --------------------------------- */
 const IconCurrency = (
@@ -297,6 +298,8 @@ export default function DashboardPage() {
           </section>
         </div>
       </div>
+
+      <EmployeeSales />
     </div>
   );
 }

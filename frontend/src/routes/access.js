@@ -43,6 +43,7 @@ export const routeAccess = {
   '/settings/manage-business': BUSINESS_ADMINS,
   '/users': BUSINESS_ADMINS,
   '/branches': BUSINESS_ADMINS,
+  '/activity-log': BUSINESS_ADMINS,
 
   '/admin/businesses': SUPER_ADMINS,
   '/admin/users': SUPER_ADMINS,

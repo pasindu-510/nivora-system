@@ -7,6 +7,7 @@
 - ``GET /api/dashboard/``                     (dashboard summary cards)
 - ``GET /api/dashboard/summary/``             (dashboard summary for frontend)
 - ``GET /api/dashboard/branch-sales/``        (per-branch sales for frontend)
+- ``GET /api/dashboard/employee-sales/``      (sales per logged-in seller)
 """
 from collections import OrderedDict
 from datetime import datetime, timedelta
@@ -33,6 +34,7 @@ from ..models import (
     StockLot,
     Supplier,
     SupplierPayment,
+    User,
 )
 from ..permissions import IsCashierOrAbove, IsManagerOrAbove
 from ..services import account_balances
@@ -708,6 +710,60 @@ class DashboardBranchSalesView(APIView):
             if row['total'] is not None and row['total'] > 0
         ]
         return Response(result)
+
+
+class DashboardEmployeeSalesView(APIView):
+    """Sales per employee, by who was logged in when each sale was saved.
+
+    Returns rows for every active user of the business (zero included) and any
+    deactivated user who sold in the period, highest total first. Cancelled
+    sales are left out. Query params: start, end (YYYY-MM-DD), both optional.
+    """
+
+    permission_classes = [IsManagerOrAbove]
+
+    def get(self, request):
+        business = request.user.business
+        qs = Sale.objects.filter(
+            business=business, status__in=[Sale.OPEN, Sale.CLOSED],
+        )
+        for param, lookup in (('start', 'created_at__date__gte'),
+                              ('end', 'created_at__date__lte')):
+            raw = request.query_params.get(param)
+            if not raw:
+                continue
+            try:
+                day = datetime.strptime(raw, '%Y-%m-%d').date()
+            except ValueError:
+                return Response({param: 'Use YYYY-MM-DD.'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            qs = qs.filter(**{lookup: day})
+
+        totals = {
+            row['created_by']: row
+            for row in qs.order_by().values('created_by').annotate(
+                sales_count=Count('id'),
+                installment_count=Count('id', filter=Q(is_single_payment=False)),
+                total=Sum('total_cost'),
+            )
+        }
+        users = User.objects.filter(
+            Q(business=business, is_active=True) | Q(pk__in=list(totals))
+        )
+        rows = []
+        for user in users:
+            row = totals.get(user.pk, {})
+            rows.append(OrderedDict(
+                user_id=user.pk,
+                username=user.username,
+                full_name=user.full_name,
+                role=user.role,
+                sales_count=row.get('sales_count', 0),
+                installment_count=row.get('installment_count', 0),
+                total=round(row.get('total') or Decimal(0), 2),
+            ))
+        rows.sort(key=lambda r: (-r['total'], r['username']))
+        return Response(rows)
 
 
 class InstallmentDueView(APIView):

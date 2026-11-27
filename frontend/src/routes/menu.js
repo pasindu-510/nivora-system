@@ -78,6 +78,7 @@ export const menuGroups = [
       { label: 'Finance Settings', to: '/settings/finance', icon: 'sliders', roles: BUSINESS_ADMINS },
       { label: 'Users & Roles', to: '/users', icon: 'userCog', roles: BUSINESS_ADMINS },
       { label: 'Branches', to: '/branches', icon: 'building', roles: BUSINESS_ADMINS },
+      { label: 'Activity Log', to: '/activity-log', icon: 'clipboard', roles: BUSINESS_ADMINS },
     ],
   },
   {

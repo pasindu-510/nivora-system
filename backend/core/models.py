@@ -756,3 +756,34 @@ class Report(BusinessModel):
 
     def __str__(self):
         return f'{self.name} ({self.report_type})'
+
+
+# ── Audit trail ─────────────────────────────────────────────────────────────
+
+class ActivityLog(BusinessModel):
+    """Who edited, deleted or cancelled what, and when. Never edited."""
+
+    EDIT = 'EDIT'
+    DELETE = 'DELETE'
+    CANCEL = 'CANCEL'
+    ACTION_CHOICES = ((EDIT, 'Edit'), (DELETE, 'Delete'), (CANCEL, 'Cancel'))
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='+',
+    )
+    # Copied so the entry still names the person after the account is removed.
+    username = models.CharField(max_length=150)
+    role = models.CharField(max_length=20, blank=True)
+    action = models.CharField(max_length=10, choices=ACTION_CHOICES)
+    record_type = models.CharField(max_length=30)
+    record_id = models.PositiveBigIntegerField(null=True, blank=True)
+    label = models.CharField(max_length=200, blank=True)
+    details = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        indexes = [
+            models.Index(fields=['business', '-created_at']),
+            models.Index(fields=['business', 'record_type', 'record_id']),
+        ]

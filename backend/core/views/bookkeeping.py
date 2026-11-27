@@ -5,7 +5,9 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from ..activity import describe_changes, log_activity, snapshot
 from ..models import (
+    ActivityLog,
     CapitalEntry,
     CashAccount,
     Expense,
@@ -172,5 +174,12 @@ class BusinessFinanceSettingsView(APIView):
             business, data=request.data, partial=True
         )
         serializer.is_valid(raise_exception=True)
+        before = snapshot(business)
         serializer.save()
+        details = describe_changes(before, snapshot(business))
+        if details:
+            log_activity(
+                request.user, ActivityLog.EDIT, 'SETTINGS',
+                label='Business settings', details=details, business=business,
+            )
         return Response(serializer.data)

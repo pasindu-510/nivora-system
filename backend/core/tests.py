@@ -4090,3 +4090,118 @@ class CustomerBlacklistTests(_StockEntryBase):
                                {'installment': first.id, 'amount': str(first.amount)},
                                format='json')
         self.assertEqual(res.status_code, 200, res.data)
+
+
+class EmployeeSalesTests(_StockEntryBase):
+    def setUp(self):
+        super().setUp()
+        self.item.selling_price = Decimal('1000')
+        self.item.save(update_fields=['selling_price'])
+        self._stock(20, '500')
+
+    def _report(self, query=''):
+        return self.client.get('/api/dashboard/employee-sales/' + query)
+
+    def test_sales_are_credited_to_the_logged_in_user(self):
+        self.client.force_authenticate(self.cashier)
+        first = self._sell(2, created_by=self.admin.id)  # ignored
+        self.assertEqual(first.data['created_by'], self.cashier.id)
+        cancelled = self._sell(1).data['id']
+        self.assertEqual(self._report().status_code, 403)
+
+        self.client.force_authenticate(self.admin)
+        self.client.post(f'/api/sales/{cancelled}/cancel/')
+        today = self.today.isoformat()
+        rows = {r['username']: r for r in
+                self._report(f'?start={today}&end={today}').data}
+        self.assertEqual(
+            (rows['entry-cashier']['sales_count'],
+             Decimal(str(rows['entry-cashier']['total']))),
+            (1, Decimal('2000')))
+        self.assertEqual(rows['entry-admin']['sales_count'], 0)
+        listed = self.client.get(f'/api/sales/?created_by={self.admin.id}').data
+        self.assertEqual(listed['count'], 0)
+
+    def test_other_businesses_are_not_listed_and_dates_are_checked(self):
+        _make_user('stranger', 'cashier', _make_business('Else'))
+        self.assertNotIn('stranger', [r['username'] for r in self._report().data])
+        self.assertEqual(self._report('?start=yesterday').status_code, 400)
+
+
+class ActivityLogTests(_StockEntryBase):
+    def setUp(self):
+        super().setUp()
+        self.item.selling_price = Decimal('1000')
+        self.item.save(update_fields=['selling_price'])
+        self._stock(20, '500')
+        self.manager = _make_user('audit-manager', 'manager', self.biz)
+
+    def _logs(self, query=''):
+        self.client.force_authenticate(self.admin)
+        return self.client.get('/api/activity-logs/' + query).data['results']
+
+    def test_cancelled_sale_names_who_did_it(self):
+        sale = self._sell(1).data
+        self.client.force_authenticate(self.manager)
+        self.assertEqual(
+            self.client.post(f"/api/sales/{sale['id']}/cancel/").status_code, 200)
+        [row] = self._logs()
+        self.assertEqual(
+            (row['username'], row['role'], row['action'], row['record_type'],
+             row['record_id'], row['label']),
+            ('audit-manager', 'manager', 'CANCEL', 'SALE', sale['id'],
+             sale['invoice_no']))
+        self.assertIn('sold by entry-admin', row['details'])
+
+    def test_edit_records_old_and_new_and_delete_keeps_the_name(self):
+        self.client.force_authenticate(self.manager)
+        res = self.client.post('/api/brands/', {'name': 'Acme'}, format='json')
+        url = f"/api/brands/{res.data['id']}/"
+        self.client.patch(url, {'name': 'Acme'}, format='json')  # no change
+        self.client.patch(url, {'name': 'Apex'}, format='json')
+        self.client.patch(f'/api/items/{self.item.id}/',
+                          {'selling_price': '1200'}, format='json')
+        self.assertEqual(self.client.delete(url).status_code, 204)
+        rows = self._logs()
+        self.assertEqual(
+            [(r['action'], r['record_type']) for r in rows],
+            [('DELETE', 'BRAND'), ('EDIT', 'PRODUCT'), ('EDIT', 'BRAND')])
+        self.assertEqual((rows[0]['label'], rows[0]['record_id']),
+                         ('Apex', res.data['id']))
+        self.assertIn('selling price: ', rows[1]['details'])
+        self.assertIn('1200', rows[1]['details'])
+        self.assertEqual(rows[2]['details'], 'name: Acme → Apex')
+        self.assertEqual(len(self._logs('?record_type=BRAND')), 2)
+        self.assertEqual(len(self._logs('?action=DELETE')), 1)
+
+    def test_blacklist_settings_stock_and_user_changes_are_logged(self):
+        self.client.force_authenticate(self.manager)
+        self.client.post(f'/api/customers/{self.buyer.id}/blacklist/',
+                         {'reason': 'late'}, format='json')
+        self.client.post(f'/api/items/{self.item.id}/adjust/',
+                         {'quantity': -1, 'branch': self.branch.id,
+                          'note': 'damaged'}, format='json')
+        self.client.force_authenticate(self.admin)
+        self.client.patch('/api/finance-settings/', {'tax_rate': '8'}, format='json')
+        self.client.patch(f'/api/users/{self.cashier.id}/',
+                          {'password': 'newpass-98765'}, format='json')
+        rows = {r['record_type']: r['details'] for r in self._logs()}
+        self.assertEqual(rows['CUSTOMER'], 'blacklisted: late')
+        self.assertIn('stock adjusted by -1', rows['PRODUCT'])
+        self.assertIn('tax rate: ', rows['SETTINGS'])
+        self.assertEqual(rows['USER'], 'password changed')
+
+    def test_only_the_business_admin_can_read_and_nobody_can_change(self):
+        self.client.force_authenticate(self.manager)
+        self.client.post(f'/api/customers/{self.buyer.id}/blacklist/',
+                         {'reason': 'late'}, format='json')
+        for user in (self.manager, self.cashier):
+            self.client.force_authenticate(user)
+            self.assertEqual(self.client.get('/api/activity-logs/').status_code, 403)
+        [row] = self._logs()
+        url = f"/api/activity-logs/{row['id']}/"
+        self.assertEqual(self.client.delete(url).status_code, 405)
+        self.assertEqual(self.client.patch(url, {}).status_code, 405)
+        other = _make_user('else-admin', 'business_admin', _make_business('Else'))
+        self.client.force_authenticate(other)
+        self.assertEqual(self.client.get('/api/activity-logs/').data['count'], 0)

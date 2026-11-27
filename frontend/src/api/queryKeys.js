@@ -12,6 +12,7 @@ export const qk = {
   dashboard: {
     summary: (params) => ['dashboard', 'summary', params ?? {}],
     branchSales: (params) => ['dashboard', 'branch-sales', params ?? {}],
+    employeeSales: (params) => ['dashboard', 'employee-sales', params ?? {}],
   },
   installments: {
     due: (params) => ['installments', 'due', params ?? {}],

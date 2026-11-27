@@ -11,10 +11,11 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
+from .activity import ActivityLogMixin
 from .models import RoleConstants
 
 
-class TenantModelViewSet(ModelViewSet):
+class TenantModelViewSet(ActivityLogMixin, ModelViewSet):
     """Base viewset: business-scoped queries and automatic business create."""
 
     #: 400 message when a delete hits on_delete=PROTECT (override per view).

@@ -27,6 +27,7 @@ def logo_url(business):
         return None
     return f"{settings.MEDIA_URL.rstrip('/')}/{business.logo.name}"
 from .models import (
+    ActivityLog,
     Branch,
     Brand,
     Business,
@@ -338,6 +339,15 @@ class PrivatePhotoField(serializers.ImageField):
         path = reverse('customer-id-card-photo', kwargs={'pk': customer.pk})
         url = f'{path}?sig={sign_customer_photo(customer)}'
         return request.build_absolute_uri(url) if request else url
+
+
+class ActivityLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ActivityLog
+        fields = [
+            'id', 'created_at', 'user', 'username', 'role', 'action',
+            'record_type', 'record_id', 'label', 'details',
+        ]
 
 
 class CustomerSerializer(TenantModelSerializer):
@@ -803,7 +813,7 @@ class PurchaseReceiptSerializer(serializers.ModelSerializer):
         fields = ['id', 'receipt_no', 'note', 'received_by', 'items', 'created_at']
 
 
-class PurchaseListSerializer(serializers.ModelSerializer):
+class PurchaseListSerializer(TenantModelSerializer):
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
     total = serializers.SerializerMethodField()
 

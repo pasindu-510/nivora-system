@@ -9,7 +9,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from .. import services
-from ..models import Brand, Category, Item, StockLot, StockMovement
+from ..activity import label_of, log_activity
+from ..models import ActivityLog, Brand, Category, Item, StockLot, StockMovement
 from ..permissions import IsCashierOrAbove, IsManagerOrAbove
 from ..serializers import (
     BrandSerializer,
@@ -186,6 +187,12 @@ class ItemViewSet(TenantModelViewSet):
             reference=f'ADJ {item.code}',
             note=reason,
             created_by=request.user,
+        )
+        log_activity(
+            request.user, ActivityLog.EDIT, 'PRODUCT',
+            record_id=item.pk, label=label_of(item),
+            details=(f'stock adjusted by {quantity:+d} at {branch.name}, now '
+                     f'{item.stock_quantity}. {reason}').strip(),
         )
         return Response({'item_id': item.id, 'new_stock': item.stock_quantity})
 

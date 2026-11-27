@@ -12,6 +12,7 @@ Full API map (spec section 6):
     CRUD  /api/items/                 items (code unique per tenant)
     CRUD  /api/customers/             customers
     GET   /api/customers/{id}/history/  purchase history + outstanding
+    GET   /api/activity-logs/           edit/delete/cancel audit (business_admin)
     CRUD  /api/suppliers/             suppliers
     GET   /api/suppliers/{id}/ledger/  supplier statement + balance owed
     CRUD  /api/purchases/             purchase orders
@@ -47,6 +48,7 @@ Full API map (spec section 6):
     GET   /api/dashboard/             dashboard summary cards
     GET   /api/dashboard/summary/     dashboard summary (frontend contract)
     GET   /api/dashboard/branch-sales/  per-branch sales (frontend contract)
+    GET   /api/dashboard/employee-sales/  sales per seller (manager+)
     GET   /api/finance-settings/      business_admin: own-business tax rate
     PATCH /api/finance-settings/      update tax rate (0-100, own tenant only)
     CRUD  /api/admin/businesses/      super_admin: tenant provisioning
@@ -69,6 +71,7 @@ from .views.bookkeeping import (
 )
 from .views.branches import BranchViewSet
 from .views.catalog import BrandViewSet, CategoryViewSet, ItemViewSet
+from .views.activity import ActivityLogViewSet
 from .views.customers import CustomerViewSet
 from .views.discounts import SeasonalDiscountViewSet
 from .views.reports import (
@@ -76,6 +79,7 @@ from .views.reports import (
     CashFlowReportView,
     CashReportView,
     DashboardBranchSalesView,
+    DashboardEmployeeSalesView,
     DashboardSummaryView,
     DashboardView,
     InstallmentDueView,
@@ -97,6 +101,7 @@ router.register('categories', CategoryViewSet, basename='category')
 router.register('brands', BrandViewSet, basename='brand')
 router.register('items', ItemViewSet, basename='item')
 router.register('customers', CustomerViewSet, basename='customer')
+router.register('activity-logs', ActivityLogViewSet, basename='activity-log')
 router.register('suppliers', SupplierViewSet, basename='supplier')
 router.register('purchases', PurchaseViewSet, basename='purchase')
 router.register('stock-lots', StockLotViewSet, basename='stocklot')
@@ -141,6 +146,7 @@ urlpatterns = [
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
     path('dashboard/summary/', DashboardSummaryView.as_view(), name='dashboard-summary'),
     path('dashboard/branch-sales/', DashboardBranchSalesView.as_view(), name='dashboard-branch-sales'),
+    path('dashboard/employee-sales/', DashboardEmployeeSalesView.as_view(), name='dashboard-employee-sales'),
     path('installments/due/', InstallmentDueView.as_view(), name='installments-due'),
     path('finance-settings/', BusinessFinanceSettingsView.as_view(), name='finance-settings'),
     path('business/logo/', BusinessLogoView.as_view(), name='business-logo'),

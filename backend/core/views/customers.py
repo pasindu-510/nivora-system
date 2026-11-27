@@ -7,7 +7,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from ..models import Customer, Installment, Payment, Sale
+from ..activity import label_of, log_activity
+from ..models import ActivityLog, Customer, Installment, Payment, Sale
 from ..permissions import IsCashierOrAbove, IsManagerOrAbove
 from ..serializers import CustomerSerializer, SaleListSerializer
 from ..storage import check_customer_photo_token
@@ -96,6 +97,7 @@ class CustomerViewSet(TenantModelViewSet):
 
     def _set_blacklist(self, flag, reason, user):
         customer = self.get_object()
+        old_reason = customer.blacklist_reason
         customer.is_blacklisted = flag
         customer.blacklist_reason = reason
         customer.blacklisted_at = timezone.now() if flag else None
@@ -103,6 +105,12 @@ class CustomerViewSet(TenantModelViewSet):
         customer.save(update_fields=[
             'is_blacklisted', 'blacklist_reason', 'blacklisted_at', 'blacklisted_by',
         ])
+        log_activity(
+            self.request.user, ActivityLog.EDIT, 'CUSTOMER',
+            record_id=customer.pk, label=label_of(customer),
+            details=(f'blacklisted: {reason}' if flag
+                     else f'removed from blacklist (was: {old_reason})'),
+        )
         return Response(self.get_serializer(customer).data)
 
     @action(detail=True, methods=['get'])

@@ -9,6 +9,7 @@ from django.db import transaction
 from rest_framework import filters, status, viewsets
 from rest_framework.response import Response
 
+from ..activity import ActivityLogMixin
 from ..models import Branch, Business, RoleConstants, User
 from ..permissions import IsBusinessAdmin
 from ..serializers import UserCreateSerializer, UserSerializer
@@ -18,7 +19,7 @@ from ..serializers import UserCreateSerializer, UserSerializer
 ASSIGNABLE_ROLES = (RoleConstants.BUSINESS_ADMIN, RoleConstants.MANAGER, RoleConstants.CASHIER)
 
 
-class BusinessUserViewSet(viewsets.ModelViewSet):
+class BusinessUserViewSet(ActivityLogMixin, viewsets.ModelViewSet):
     """Staff CRUD for the caller's own business (business_admin only).
 
     The business is never taken from the request body: it is forced to the
