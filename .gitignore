@@ -20,3 +20,20 @@ node_modules/
 .DS_Store
 # Private uploads (customer ID photos) — never commit
 backend/private_media/
+
+# Uploaded files (logos, product images)
+backend/media/
+backend/staticfiles/
+backend/tmp/
+
+# Scratch output: screenshots dropped in the repo root, logs, backups, caches
+/*.png
+*.log
+*.bak
+build_out.txt
+.pytest_cache/
+
+# Local AI / browser tool data
+.codegraph/
+.playwright-mcp/
+.omo/
