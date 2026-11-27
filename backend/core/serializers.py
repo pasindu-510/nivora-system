@@ -1069,6 +1069,7 @@ class UserSerializer(serializers.ModelSerializer):
     business_installments_enabled = serializers.SerializerMethodField()
     business_installment_monthly_interest_rate = serializers.SerializerMethodField()
     business_required_guarantors = serializers.SerializerMethodField()
+    business_max_installments = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -1079,6 +1080,7 @@ class UserSerializer(serializers.ModelSerializer):
             'business_backdate_limit_days', 'business_item_images_enabled',
             'business_min_down_payment_percent', 'business_installments_enabled',
             'business_installment_monthly_interest_rate', 'business_required_guarantors',
+            'business_max_installments',
         ]
 
     def get_business_tax_rate(self, obj):
@@ -1096,6 +1098,11 @@ class UserSerializer(serializers.ModelSerializer):
     def get_business_installment_monthly_interest_rate(self, obj):
         business = getattr(obj, 'business', None)
         return str(business.installment_monthly_interest_rate) if business is not None else '0'
+
+    def get_business_max_installments(self, obj):
+        # null means unlimited.
+        business = getattr(obj, 'business', None)
+        return business.max_installments if business is not None else None
 
     def get_business_required_guarantors(self, obj):
         business = getattr(obj, 'business', None)

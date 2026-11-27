@@ -1,4 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext.jsx';
 import { filterMenu, roleLabel } from '../utils/permissions.js';
 import { activeMenuPath, menuGroups } from '../routes/menu.js';
 import Icon from './Icon.jsx';
@@ -8,7 +9,12 @@ import Icon from './Icon.jsx';
  * Off-canvas on small screens (tablets), fixed rail on lg+.
  */
 export default function Sidebar({ open, onClose, role, businessName, businessLogo }) {
-  const groups = filterMenu(menuGroups, role);
+  const { user } = useAuth();
+  const installmentsOn = user?.business_installments_enabled !== false;
+  const groups = filterMenu(menuGroups, role).map((group) => ({
+    ...group,
+    items: group.items.filter((item) => installmentsOn || !item.needsInstallments),
+  }));
   // Resolved once so nested routes highlight exactly one, most-specific item.
   const { pathname } = useLocation();
   const activePath = activeMenuPath(groups, pathname);

@@ -20,6 +20,7 @@ export const routeAccess = {
   '/sales': STAFF,
   '/sales/:id': STAFF,
   '/installments': STAFF,
+  '/installments/calculator': STAFF,
   '/customers': STAFF,
   '/items': STAFF,
 

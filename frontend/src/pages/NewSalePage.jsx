@@ -13,6 +13,7 @@ import {
 import { qk } from '../api/queryKeys.js';
 import { apiErrorMessage } from '../api/client.js';
 import { formatLKR } from '../utils/format.js';
+import { balanceAfter, installmentPlan, minimumDownPayment } from '../utils/installments.js';
 import PageHeader from '../components/PageHeader.jsx';
 import CustomerPicker from '../components/CustomerPicker.jsx';
 import EntryDateField, { pastDate, useBackdate } from '../components/EntryDateField.jsx';
@@ -230,8 +231,7 @@ export default function NewSalePage() {
 
   // Same rule as the server: share of the total, rounded UP to the next 100.
   const minPercent = toNumber(user?.business_min_down_payment_percent);
-  const totalCents = Math.round(totals.total * 100);
-  const minDown = Math.ceil((totalCents * minPercent) / 1000000 - 1e-9) * 100;
+  const minDown = minimumDownPayment(totals.total, minPercent);
   const downValue = downPayment === '' ? String(minDown) : downPayment;
   const tooSmall = minDown > 0 && minDown >= totals.total;
 
@@ -240,19 +240,14 @@ export default function NewSalePage() {
   const needed = Number(user?.business_required_guarantors) || 0;
   const monthlyRate = toNumber(user?.business_installment_monthly_interest_rate);
   const count = Math.max(0, Math.floor(toNumber(installmentCount)));
-  const balance = Math.max(0, Math.round((totals.total - toNumber(downValue)) * 100) / 100);
-  // Flat monthly interest, each installment rounded UP to the next 50.
-  const months =
-    installmentFrequency === 'MONTHLY'
-      ? count
-      : (count * (toNumber(installmentIntervalDays) || 30)) / 30;
-  const perInstallment =
-    count === 0
-      ? 0
-      : monthlyRate > 0
-        ? Math.ceil((balance * (1 + (monthlyRate * months) / 100)) / count / 50 - 1e-9) * 50
-        : balance / count;
-  const planTotal = monthlyRate > 0 ? perInstallment * count : balance;
+  const balance = balanceAfter(totals.total, toNumber(downValue));
+  const { perInstallment, planTotal } = installmentPlan({
+    balance,
+    monthlyRate,
+    count,
+    frequency: installmentFrequency,
+    intervalDays: toNumber(installmentIntervalDays) || 30,
+  });
 
   // ── Submit ────────────────────────────────────────────────────────────────
   async function handleSubmit(event) {

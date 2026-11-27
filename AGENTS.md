@@ -13,7 +13,7 @@ Read these before changing or rewriting anything:
 
 Working rules:
 
-- Backend tests: `cd backend && .venv/Scripts/python manage.py test core` (232 tests, must stay green).
+- Backend tests: `cd backend && .venv/Scripts/python manage.py test core` (233 tests, must stay green).
 - Frontend: `cd frontend && npm run build` (production API URL comes from `.env.production`).
 - Every business-level query must be scoped to `request.user.business`; every incoming
   foreign key must be validated against that business (see blueprint §3, §12 B-02).

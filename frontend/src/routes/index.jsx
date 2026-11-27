@@ -10,6 +10,7 @@ import SalesListPage from '../pages/SalesListPage.jsx';
 import SaleDetailPage from '../pages/SaleDetailPage.jsx';
 import InstallmentsPage from '../pages/InstallmentsPage.jsx';
 import InstallmentPaymentsPage from '../pages/InstallmentPaymentsPage.jsx';
+import InstallmentCalculatorPage from '../pages/InstallmentCalculatorPage.jsx';
 import CustomersPage from '../pages/CustomersPage.jsx';
 import ItemsPage from '../pages/ItemsPage.jsx';
 import CategoriesPage from '../pages/CategoriesPage.jsx';
@@ -84,6 +85,7 @@ export default function AppRoutes() {
         <Route path="/sales/:id" element={guarded(STAFF, <SaleDetailPage />)} />
         <Route path="/installments" element={guarded(STAFF, <InstallmentsPage />)} />
         <Route path="/installments/pay" element={guarded(STAFF, <InstallmentPaymentsPage />)} />
+        <Route path="/installments/calculator" element={guarded(STAFF, <InstallmentCalculatorPage />)} />
 
         {/* Customers & catalog */}
         <Route path="/customers" element={guarded(STAFF, <CustomersPage />)} />

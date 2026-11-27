@@ -25,6 +25,14 @@ export const menuGroups = [
       { label: 'Sales', to: '/sales', icon: 'receipt', roles: STAFF },
       { label: 'Installments', to: '/installments', icon: 'clock', roles: STAFF },
       { label: 'Installment Payments', to: '/installments/pay', icon: 'repeat', roles: STAFF },
+      {
+        label: 'Installment Calculator',
+        to: '/installments/calculator',
+        icon: 'percent',
+        roles: STAFF,
+        // Hidden when the owner turns installments off in Manage Business.
+        needsInstallments: true,
+      },
     ],
   },
   {

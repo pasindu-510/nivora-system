@@ -3800,6 +3800,13 @@ class PlanSettingsTests(APITestCase):
             format='json')
         self.assertEqual(res.status_code, 201, res.data)
 
+    def test_me_reports_max_installments(self):
+        self.assertIsNone(
+            self.client.get('/api/auth/me/').data['business_max_installments'])
+        self._set(max_installments=6)
+        self.assertEqual(
+            self.client.get('/api/auth/me/').data['business_max_installments'], 6)
+
     def test_product_images_can_be_turned_off(self):
         self.assertTrue(self.client.get('/api/auth/me/').data[
             'business_item_images_enabled'])

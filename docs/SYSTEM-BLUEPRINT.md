@@ -691,7 +691,7 @@ except health, login, refresh. Trailing slashes are required. "CRUD" =
 
 `<User>` = `{id, username, full_name, phone, role, business, branch, is_active, email,
 business_tax_rate:"15.00", business_installment_interest_rate:"0.00", business_backdate_limit_days:0, business_item_images_enabled:true, business_min_down_payment_percent:"0.00", business_installments_enabled:true,
-business_installment_monthly_interest_rate:"0.00", business_required_guarantors:0,
+business_installment_monthly_interest_rate:"0.00", business_required_guarantors:0, business_max_installments:null,
 business_name, business_logo:"/media/business_logos/x.png"|null}`
 (`business_tax_rate` etc. are `"0"`/null when user has no business).
 
@@ -916,6 +916,7 @@ Role groups: `STAFF` = business_admin, manager, cashier; `ADMIN_MANAGER` = busin
 | `/sales/:id` | STAFF | sale detail, installments table, pay installment, cancel (manager+), **print / PDF bill** | sales.get/pay/cancel, cash-accounts |
 | `/installments` | STAFF | due & overdue list, quick pay | installments/due, payInstallment |
 | `/installments/pay` | STAFF | find outstanding sale → pay an installment | sales.list/get, payInstallment |
+| `/installments/calculator` | STAFF | instant monthly quote from total price + down payment, using the business installment rules (monthly plans only, nothing is saved); menu item and screen hidden when `business_installments_enabled` is false. Maths shared with New Sale in `utils/installments.js` | auth/me |
 | `/customers` | STAFF | CRUD, ID photo upload, purchase history drawer | customers.* |
 | `/items` | STAFF (write manager+) | product CRUD (no quantities or cost), per-branch stock, last cost, next FIFO cost and stock value (hidden for cashier) | items, categories, brands |
 | `/stock/in` | ADMIN_MANAGER | supplier purchase or opening stock in one step, optional price change, payment and received date | stock-ins, items, suppliers, branches, cash-accounts |
